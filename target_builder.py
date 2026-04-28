@@ -4,117 +4,150 @@ import sys
 import os
 from urllib.parse import urlparse
 
-INPUT_FILE  = os.getenv("CRAWL_RESULT",  "crawl_result.json")
-OUTPUT_FILE = os.getenv("TARGETS_FILE",  "targets.json")
+INPUT_FILE = os.getenv("CRAWL_RESULT", "crawl_result.json")
+OUTPUT_FILE = os.getenv("TARGETS_FILE", "targets.json")
 
-# 인젝션 제외: CSRF/nonce 류 필드명
+# CSRF/토큰/캡차 계열 필드는 공격 대상에서 제외
 CSRF_RE = re.compile(r"(csrf|token|nonce|_token|authenticity|captcha)", re.IGNORECASE)
 
-# 인젝션 제외: 의미 없는 버튼/파일 타입
+# 버튼/파일 계열 input은 공격 대상에서 제외
 SKIP_TYPES = {"submit", "button", "reset", "image", "file"}
 
 
-# --- 헬퍼 
 
+# ----- 헬퍼 함수 -----
+
+# 이 파라미터에 공격 넣을지 판단
 def _injectable(name: str, field_type: str) -> bool:
+    if not name:
+        return False
     if field_type in SKIP_TYPES:
         return False
     if CSRF_RE.search(name):
         return False
     return True
 
-
+# 쿼리 제거
 def _base_url(url: str) -> str:
     return urlparse(url)._replace(query="", fragment="").geturl()
 
-
-def _form_sig(action: str, method: str, names: list[str]) -> str:
-    return f"{method}:{action}:{','.join(sorted(names))}"
-
+# 중복 제거를 위한 시그니처 생성 헬퍼
+def _form_sig(action: str, method: str, enctype: str, names: list[str]) -> str:
+    method = (method or "GET").upper()
+    action = (action or "").strip()
+    enctype = (enctype or "application/x-www-form-urlencoded").lower()
+    return f"{method}:{action}:{enctype}:{','.join(sorted(names))}"
 
 def _url_sig(base: str, names: list[str]) -> str:
+    base = (base or "").strip()
     return f"GET:{base}:{','.join(sorted(names))}"
 
 
-# --- 핵심 분석
+
+
 def build_targets(pages: list[dict]) -> list[dict]:
     targets: list[dict] = []
-    seen:    set[str]   = set()
+    seen: set[str] = set()
     tid = 0
 
     for page in pages:
-        source = page["url"]
+        source = page.get("url", "").strip()
+        if not source:
+            continue
 
         # 1. URL 쿼리 파라미터
         qp = page.get("query_params", {})
         if qp:
             base = _base_url(source)
-            params = [
-                {
-                    "name":          name,
-                    "field_type":    "url_param",
+            params = []
+
+            for name, vals in qp.items():
+                name = (name or "").strip()
+                if not name:
+                    continue
+
+                field_type = "url_param"
+
+                params.append({
+                    "name": name,
+                    "field_type": field_type,
                     "default_value": vals[0] if vals else "",
-                    "options":       [],
-                    "injectable":    True,
-                }
-                for name, vals in qp.items()
-            ]
-            sig = _url_sig(base, [p["name"] for p in params])
-            if sig not in seen:
-                seen.add(sig)
-                tid += 1
-                targets.append({
-                    "id":         f"url_{tid:04d}",
-                    "type":       "url_param",
-                    "source_url": source,
-                    "action":     base,
-                    "method":     "GET",
-                    "enctype":    "application/x-www-form-urlencoded",
-                    "params":     params,
+                    "options": [],
+                    "injectable": _injectable(name, field_type),
                 })
+
+            if params:
+                sig = _url_sig(base, [p["name"] for p in params])
+
+                if sig not in seen:
+                    seen.add(sig)
+                    tid += 1
+                    targets.append({
+                        "id": f"url_{tid:04d}",
+                        "type": "url_param",
+                        "source_url": source,
+                        "action": base,
+                        "method": "GET",
+                        "enctype": "application/x-www-form-urlencoded",
+                        "params": params,
+                    })
 
         # 2. HTML Form
         for form in page.get("forms", []):
+            action = form.get("action", "").strip()
+            method = form.get("method", "GET").upper()
+            enctype = form.get("enctype", "application/x-www-form-urlencoded").lower()
+
+            if not action:
+                continue
+
             params = []
+
             for f in form.get("fields", []):
-                if f["field_type"] in SKIP_TYPES:
+                name = (f.get("name") or "").strip()
+                field_type = (f.get("field_type") or "text").lower()
+
+                if not name:
                     continue
+
+                if field_type in SKIP_TYPES:
+                    continue
+
                 params.append({
-                    "name":          f["name"],
-                    "field_type":    f["field_type"],
+                    "name": name,
+                    "field_type": field_type,
                     "default_value": f.get("value", ""),
-                    "options":       f.get("options", []),
-                    "injectable":    _injectable(f["name"], f["field_type"]),
+                    "options": f.get("options", []),
+                    "injectable": _injectable(name, field_type),
                 })
 
             if not params:
                 continue
 
-            sig = _form_sig(form["action"], form["method"],
-                            [p["name"] for p in params])
+            sig = _form_sig(action, method, enctype, [p["name"] for p in params])
+
             if sig not in seen:
                 seen.add(sig)
                 tid += 1
                 targets.append({
-                    "id":         f"form_{tid:04d}",
-                    "type":       "form",
+                    "id": f"form_{tid:04d}",
+                    "type": "form",
                     "source_url": source,
-                    "action":     form["action"],
-                    "method":     form["method"],
-                    "enctype":    form.get("enctype", "application/x-www-form-urlencoded"),
-                    "params":     params,
+                    "action": action,
+                    "method": method,
+                    "enctype": enctype,
+                    "params": params,
                 })
 
     return targets
 
 
-# --- 요약 출력
-
+# 요약 출력
 def print_summary(targets: list[dict]) -> None:
-    url_t  = [t for t in targets if t["type"] == "url_param"]
+    url_t = [t for t in targets if t["type"] == "url_param"]
     form_t = [t for t in targets if t["type"] == "form"]
-    post_t = [t for t in form_t  if t["method"] == "POST"]
-    get_t  = [t for t in form_t  if t["method"] == "GET"]
+    post_t = [t for t in form_t if t["method"] == "POST"]
+    get_t = [t for t in form_t if t["method"] == "GET"]
 
     total_injectable = sum(
         sum(1 for p in t["params"] if p["injectable"])
@@ -136,12 +169,13 @@ def print_summary(targets: list[dict]) -> None:
     for t in targets:
         inj = [p["name"] for p in t["params"] if p["injectable"]]
         skip = [p["name"] for p in t["params"] if not p["injectable"]]
+
         print(f"  [{t['id']}] {t['method']} {t['action']}")
+
         if inj:
             print(f"           inject : {inj}")
         if skip:
             print(f"           skip   : {skip}")
-
 
 
 if __name__ == "__main__":
