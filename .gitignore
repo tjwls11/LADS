@@ -1,5 +1,0 @@
-.env
-crawl_result.json
-__pycache__/
-*.pyc
-targets.json
