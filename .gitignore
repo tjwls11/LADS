@@ -1,5 +1,6 @@
 .env
-crawl_result.json
 __pycache__/
 *.pyc
-targets.json
+
+# JSON 결과 파일 (로컬 전용)
+*.json
