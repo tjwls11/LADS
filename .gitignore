@@ -1,5 +1,17 @@
+# Environment files
 .env
-crawl_result.json
+*.env
+
+# Python cache
 __pycache__/
 *.pyc
+
+# Data / result files
+log/
+baseline/
 targets.json
+sum_log.txt
+crawl_result.json
+
+# JSON result files - local only
+*.json
