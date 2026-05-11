@@ -527,6 +527,25 @@ def delete_run(run_id):
     return redirect("/runs")
 
 
+@app.route("/runs/<run_id>/report.pdf")
+def download_report(run_id):
+    from flask import send_file
+    import io
+    import report as report_gen
+
+    run_dir = os.path.join(RUNS_DIR, run_id)
+    if not os.path.isdir(run_dir):
+        return "Run not found", 404
+
+    pdf_bytes = report_gen.generate(run_id, run_dir)
+    return send_file(
+        io.BytesIO(pdf_bytes),
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=f"LADS_{run_id}.pdf",
+    )
+
+
 if __name__ == "__main__":
     os.makedirs("results", exist_ok=True)
     _init_run()
