@@ -20,6 +20,10 @@ LOGIN_SUCCESS_INDICATOR = os.getenv("LOGIN_SUCCESS_INDICATOR", "")
 LOGIN_SUCCESS_URL_KEYWORD = os.getenv("LOGIN_SUCCESS_URL_KEYWORD", "")
 LOGIN_FAIL_INDICATOR = os.getenv("LOGIN_FAIL_INDICATOR", "")
 
+# BAC 멀티 세션용 관리자 계정
+ADMIN_ID = os.getenv("ADMIN_ID", "")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+
 _TIMEOUT = int(os.getenv("CRAWL_TIMEOUT", "10"))
 
 
@@ -160,3 +164,66 @@ def login(
 
     print("[LOGIN] no success evidence found", file=sys.stderr)
     return False, {}
+
+
+def _make_session() -> requests.Session:
+    s = requests.Session()
+    s.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+    })
+    return s
+
+
+def login_all_roles(
+    url: str = LOGIN_URL,
+    method: str = LOGIN_METHOD,
+    id_field: str = LOGIN_ID_FIELD,
+    password_field: str = LOGIN_PASSWORD_FIELD,
+    success_indicator: str = LOGIN_SUCCESS_INDICATOR,
+    success_url_keyword: str = LOGIN_SUCCESS_URL_KEYWORD,
+    fail_indicator: str = LOGIN_FAIL_INDICATOR,
+    timeout: int = _TIMEOUT,
+) -> dict[str, dict]:
+    """
+    역할별 세션 쿠키를 반환한다.
+
+    반환 형태:
+        {
+            "guest":  {},          # 무인증
+            "member": {...},       # LOGIN_ID/LOGIN_PASSWORD 로 로그인
+            "admin":  {...},       # ADMIN_ID/ADMIN_PASSWORD 로 로그인 (설정 없으면 생략)
+        }
+    """
+    roles: dict[str, dict] = {"guest": {}}
+
+    common = dict(
+        url=url, method=method, id_field=id_field, password_field=password_field,
+        success_indicator=success_indicator, success_url_keyword=success_url_keyword,
+        fail_indicator=fail_indicator, timeout=timeout,
+    )
+
+    if LOGIN_ID:
+        s = _make_session()
+        ok, cookies = login(s, login_id=LOGIN_ID, login_password=LOGIN_PASSWORD, **common)
+        if ok:
+            roles["member"] = cookies
+            print(f"[AUTH] member session acquired: {len(cookies)} cookies")
+        else:
+            print("[AUTH] member login failed — member session skipped", file=sys.stderr)
+
+    if ADMIN_ID:
+        s = _make_session()
+        ok, cookies = login(s, login_id=ADMIN_ID, login_password=ADMIN_PASSWORD, **common)
+        if ok:
+            roles["admin"] = cookies
+            print(f"[AUTH] admin session acquired: {len(cookies)} cookies")
+        else:
+            print("[AUTH] admin login failed — admin session skipped", file=sys.stderr)
+
+    return roles

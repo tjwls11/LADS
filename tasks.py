@@ -41,6 +41,16 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     else:
         print("[CRAWL] no auth cookies (anonymous crawl)")
 
+    # BAC용 역할별 세션 쿠키 저장
+    from crawl.auth import login_all_roles
+    role_sessions = login_all_roles()
+    for role, cookies in role_sessions.items():
+        role_file = run_path_fn(f"auth_cookies_{role}.json")
+        with open(role_file, "w", encoding="utf-8") as f:
+            json.dump(cookies, f, ensure_ascii=False, indent=2)
+    acquired = [r for r, c in role_sessions.items() if c or r == "guest"]
+    print(f"[CRAWL] role sessions saved: {acquired}")
+
     with open(crawl_file, encoding="utf-8") as f:
         pages = json.load(f)
     targets = build_targets(pages)
