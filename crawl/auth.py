@@ -27,8 +27,8 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 _TIMEOUT = int(os.getenv("CRAWL_TIMEOUT", "10"))
 
 
+# CSRF 토큰 등 hidden input 값 추출
 def extract_hidden_inputs(form_tag) -> dict:
-    # CSRF 토큰 등 hidden input 값 추출
     hidden = {}
     if not form_tag:
         return hidden
@@ -39,8 +39,8 @@ def extract_hidden_inputs(form_tag) -> dict:
     return hidden
 
 
+# name/id/placeholder/autocomplete 속성으로 아이디, 비밀번호 필드 추론
 def infer_login_fields(form_tag, id_field: str = "", password_field: str = "") -> Optional[tuple[str, str]]:
-    # name/id/placeholder/autocomplete 속성으로 아이디, 비밀번호 필드 추론
     inputs = form_tag.find_all("input")
 
     # 비밀번호 필드 찾기 (type=password 또는 키워드 매칭)
@@ -76,8 +76,8 @@ def infer_login_fields(form_tag, id_field: str = "", password_field: str = "") -
     return None
 
 
+# 페이지에서 로그인 폼 탐색 (env 지정 필드 -> 추론 순서로 시도)
 def find_login_form(soup: BeautifulSoup, id_field: str = "", password_field: str = ""):
-    # 페이지에서 로그인 폼 탐색 (env 지정 필드 -> 추론 순서로 시도)
     forms = soup.find_all("form")
     if id_field and password_field:
         for form in forms:
@@ -102,6 +102,7 @@ def login(
     fail_indicator: str = LOGIN_FAIL_INDICATOR,
     timeout: int = _TIMEOUT,
 ) -> tuple[bool, dict]:
+
     # 로그인 수행, (성공 여부, 쿠키) 반환 — 실패 시 (False, {})
     if not url:
         return False, {}
@@ -180,6 +181,7 @@ def _make_session() -> requests.Session:
     return s
 
 
+# 역할별 세션 쿠키 반환
 def login_all_roles(
     url: str = LOGIN_URL,
     method: str = LOGIN_METHOD,
@@ -190,16 +192,13 @@ def login_all_roles(
     fail_indicator: str = LOGIN_FAIL_INDICATOR,
     timeout: int = _TIMEOUT,
 ) -> dict[str, dict]:
-    """
-    역할별 세션 쿠키를 반환한다.
 
-    반환 형태:
-        {
-            "guest":  {},          # 무인증
-            "member": {...},       # LOGIN_ID/LOGIN_PASSWORD 로 로그인
-            "admin":  {...},       # ADMIN_ID/ADMIN_PASSWORD 로 로그인 (설정 없으면 생략)
-        }
-    """
+    # os.getenv 재호출
+    _login_id       = os.getenv("LOGIN_ID", LOGIN_ID)
+    _login_password = os.getenv("LOGIN_PASSWORD", LOGIN_PASSWORD)
+    _admin_id       = os.getenv("ADMIN_ID", ADMIN_ID)
+    _admin_password = os.getenv("ADMIN_PASSWORD", ADMIN_PASSWORD)
+
     roles: dict[str, dict] = {"guest": {}}
 
     common = dict(
@@ -208,18 +207,18 @@ def login_all_roles(
         fail_indicator=fail_indicator, timeout=timeout,
     )
 
-    if LOGIN_ID:
+    if _login_id:
         s = _make_session()
-        ok, cookies = login(s, login_id=LOGIN_ID, login_password=LOGIN_PASSWORD, **common)
+        ok, cookies = login(s, login_id=_login_id, login_password=_login_password, **common)
         if ok:
             roles["member"] = cookies
             print(f"[AUTH] member session acquired: {len(cookies)} cookies")
         else:
             print("[AUTH] member login failed — member session skipped", file=sys.stderr)
 
-    if ADMIN_ID:
+    if _admin_id:
         s = _make_session()
-        ok, cookies = login(s, login_id=ADMIN_ID, login_password=ADMIN_PASSWORD, **common)
+        ok, cookies = login(s, login_id=_admin_id, login_password=_admin_password, **common)
         if ok:
             roles["admin"] = cookies
             print(f"[AUTH] admin session acquired: {len(cookies)} cookies")

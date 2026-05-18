@@ -427,6 +427,64 @@ def targets_page():
     return render_template("targets.html", targets=_get_target_envs())
 
 
+# 지정된 키를 .env 파일에 덮어쓰고 os.environ도 즉시 갱신
+def _update_env_file(updates: dict) -> None:
+    env_path = ".env"
+    lines: list[str] = []
+    if os.path.exists(env_path):
+        with open(env_path, encoding="utf-8") as f:
+            lines = f.readlines()
+
+    written: set[str] = set()
+    new_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            new_lines.append(line)
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if key in updates:
+            new_lines.append(f"{key}='{updates[key]}'\n")
+            written.add(key)
+        else:
+            new_lines.append(line)
+
+    for key, val in updates.items():
+        if key not in written:
+            new_lines.append(f"{key}='{val}'\n")
+
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
+    for key, val in updates.items():
+        os.environ[key] = val
+
+
+@app.route("/settings", methods=["GET", "POST"])
+def settings_page():
+    saved = False
+    if request.method == "POST":
+        updates = {
+            "LOGIN_ID":             request.form.get("login_id", ""),
+            "LOGIN_PASSWORD":       request.form.get("login_password", ""),
+            "ADMIN_ID":             request.form.get("admin_id", ""),
+            "ADMIN_PASSWORD":       request.form.get("admin_password", ""),
+            "LOGIN_FAIL_INDICATOR": request.form.get("login_fail_indicator", ""),
+        }
+        _update_env_file(updates)
+        saved = True
+
+    return render_template(
+        "settings.html",
+        saved=saved,
+        login_id=os.getenv("LOGIN_ID", ""),
+        login_password=os.getenv("LOGIN_PASSWORD", ""),
+        admin_id=os.getenv("ADMIN_ID", ""),
+        admin_password=os.getenv("ADMIN_PASSWORD", ""),
+        login_fail_indicator=os.getenv("LOGIN_FAIL_INDICATOR", ""),
+    )
+
+
 @app.route("/settings/target", methods=["POST"])
 def set_target():
     global _active_target_key
