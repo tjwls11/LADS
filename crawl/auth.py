@@ -145,23 +145,20 @@ def login(
         return False, {}
 
     # 성공/실패 판단
-    # 실패 키워드 -> 성공 키워드 -> 최종 URL -> 쿠키 존재 순서로 확인
+    # 최종 URL -> 쿠키 존재 -> 실패 키워드(fallback) 순서로 확인
     body_lower = post_resp.text.lower()
     final_url_lower = post_resp.url.lower()
     cookies = session.cookies.get_dict()
 
-    if fail_indicator and fail_indicator in body_lower:
-        print("[LOGIN] failed by fail indicator", file=sys.stderr)
-        return False, {}
-    if success_indicator and success_indicator in body_lower:
-        print(f"[LOGIN] success by indicator, cookies={len(cookies)}")
-        return True, cookies
     if success_url_keyword and success_url_keyword in final_url_lower:
         print(f"[LOGIN] success by final URL, cookies={len(cookies)}")
         return True, cookies
     if cookies:
-        print(f"[LOGIN] success assumed by cookies, cookies={len(cookies)}")
+        print(f"[LOGIN] success by cookies, cookies={len(cookies)}")
         return True, cookies
+    if fail_indicator and fail_indicator in body_lower:
+        print("[LOGIN] failed by fail indicator", file=sys.stderr)
+        return False, {}
 
     print("[LOGIN] no success evidence found", file=sys.stderr)
     return False, {}
