@@ -20,11 +20,15 @@ LOGIN_SUCCESS_INDICATOR = os.getenv("LOGIN_SUCCESS_INDICATOR", "")
 LOGIN_SUCCESS_URL_KEYWORD = os.getenv("LOGIN_SUCCESS_URL_KEYWORD", "")
 LOGIN_FAIL_INDICATOR = os.getenv("LOGIN_FAIL_INDICATOR", "")
 
+# BAC 멀티 세션용 관리자 계정
+ADMIN_ID = os.getenv("ADMIN_ID", "")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+
 _TIMEOUT = int(os.getenv("CRAWL_TIMEOUT", "10"))
 
 
+# CSRF 토큰 등 hidden input 값 추출
 def extract_hidden_inputs(form_tag) -> dict:
-    # CSRF 토큰 등 hidden input 값 추출
     hidden = {}
     if not form_tag:
         return hidden
@@ -35,8 +39,8 @@ def extract_hidden_inputs(form_tag) -> dict:
     return hidden
 
 
+# name/id/placeholder/autocomplete 속성으로 아이디, 비밀번호 필드 추론
 def infer_login_fields(form_tag, id_field: str = "", password_field: str = "") -> Optional[tuple[str, str]]:
-    # name/id/placeholder/autocomplete 속성으로 아이디, 비밀번호 필드 추론
     inputs = form_tag.find_all("input")
 
     # 비밀번호 필드 찾기 (type=password 또는 키워드 매칭)
@@ -72,8 +76,8 @@ def infer_login_fields(form_tag, id_field: str = "", password_field: str = "") -
     return None
 
 
+# 페이지에서 로그인 폼 탐색 (env 지정 필드 -> 추론 순서로 시도)
 def find_login_form(soup: BeautifulSoup, id_field: str = "", password_field: str = ""):
-    # 페이지에서 로그인 폼 탐색 (env 지정 필드 -> 추론 순서로 시도)
     forms = soup.find_all("form")
     if id_field and password_field:
         for form in forms:
@@ -98,6 +102,7 @@ def login(
     fail_indicator: str = LOGIN_FAIL_INDICATOR,
     timeout: int = _TIMEOUT,
 ) -> tuple[bool, dict]:
+
     # 로그인 수행, (성공 여부, 쿠키) 반환 — 실패 시 (False, {})
     if not url:
         return False, {}
@@ -160,3 +165,64 @@ def login(
 
     print("[LOGIN] no success evidence found", file=sys.stderr)
     return False, {}
+
+
+def _make_session() -> requests.Session:
+    s = requests.Session()
+    s.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+    })
+    return s
+
+
+# 역할별 세션 쿠키 반환
+def login_all_roles(
+    url: str = LOGIN_URL,
+    method: str = LOGIN_METHOD,
+    id_field: str = LOGIN_ID_FIELD,
+    password_field: str = LOGIN_PASSWORD_FIELD,
+    success_indicator: str = LOGIN_SUCCESS_INDICATOR,
+    success_url_keyword: str = LOGIN_SUCCESS_URL_KEYWORD,
+    fail_indicator: str = LOGIN_FAIL_INDICATOR,
+    timeout: int = _TIMEOUT,
+) -> dict[str, dict]:
+
+    # os.getenv 재호출
+    _login_id       = os.getenv("LOGIN_ID", LOGIN_ID)
+    _login_password = os.getenv("LOGIN_PASSWORD", LOGIN_PASSWORD)
+    _admin_id       = os.getenv("ADMIN_ID", ADMIN_ID)
+    _admin_password = os.getenv("ADMIN_PASSWORD", ADMIN_PASSWORD)
+
+    roles: dict[str, dict] = {"guest": {}}
+
+    common = dict(
+        url=url, method=method, id_field=id_field, password_field=password_field,
+        success_indicator=success_indicator, success_url_keyword=success_url_keyword,
+        fail_indicator=fail_indicator, timeout=timeout,
+    )
+
+    if _login_id:
+        s = _make_session()
+        ok, cookies = login(s, login_id=_login_id, login_password=_login_password, **common)
+        if ok:
+            roles["member"] = cookies
+            print(f"[AUTH] member session acquired: {len(cookies)} cookies")
+        else:
+            print("[AUTH] member login failed — member session skipped", file=sys.stderr)
+
+    if _admin_id:
+        s = _make_session()
+        ok, cookies = login(s, login_id=_admin_id, login_password=_admin_password, **common)
+        if ok:
+            roles["admin"] = cookies
+            print(f"[AUTH] admin session acquired: {len(cookies)} cookies")
+        else:
+            print("[AUTH] admin login failed — admin session skipped", file=sys.stderr)
+
+    return roles
