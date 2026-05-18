@@ -343,7 +343,7 @@ _SQL_CONTEXT_MAP = {
 }
 
 def get_by_sql_context(context: str, strength: str = "MEDIUM") -> List[Payload]:
-    """fuzzer/strategy.py 호환용 alias. get_by_context / get_blind_sqli 래핑."""
+    """probe/strategy.py 호환용 alias. get_by_context / get_blind_sqli 래핑."""
     mapped = _SQL_CONTEXT_MAP.get(context.lower())
     if mapped is None and context.lower() == "like_string":
         return _limit(get_blind_sqli("like_string"), strength)

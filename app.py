@@ -31,7 +31,7 @@ from flask import Flask, Response, redirect, render_template, request
 from tasks import (
     _task_crawl as _crawl_impl,
     _task_payload as _payload_impl,
-    _task_fuzz as _fuzz_impl,
+    _task_probe as _probe_impl,
     _task_execute as _execute_impl,
     _task_validate as _validate_impl,
     _task_misconfig as _misconfig_impl,
@@ -136,8 +136,8 @@ def _task_payload():
     _payload_impl(PAYLOADS_FILE, _emit_progress)
 
 
-def _task_fuzz():
-    _fuzz_impl(_run_path, PAYLOADS_FILE, PAYLOADS_META_FILE, _emit_progress)
+def _task_probe():
+    _probe_impl(_run_path, PAYLOADS_FILE, PAYLOADS_META_FILE, _emit_progress)
 
 
 def _task_execute():
@@ -159,7 +159,7 @@ def _task_all(skip_crawl: bool = False):
 _TASK_FUNCS = {
     "crawl":    _task_crawl,
     "payload":  _task_payload,
-    "fuzz":     _task_fuzz,
+    "probe":    _task_probe,
     "execute":  _task_execute,
     "validate": _task_validate,
     "misconfig": _task_misconfig,
@@ -258,7 +258,7 @@ def _get_file_status():
         ("크롤링 결과", os.path.exists(_run_path("crawl_result.json"))),
         ("타깃 목록", os.path.exists(_run_path("targets.json"))),
         ("페이로드", os.path.exists(PAYLOADS_FILE)),
-        ("퍼징 작업", os.path.exists(_run_path("fuzz_tasks.json"))),
+        ("탐색 작업 목록", os.path.exists(_run_path("probe_tasks.json"))),
         ("실행 결과", os.path.exists(_run_path("execution_results.json"))),
         ("취약점 결과", os.path.exists(_run_path("findings.json"))),
     ]
@@ -297,7 +297,7 @@ def _get_pipeline_steps():
     checks = [
         ("crawl", "크롤러", "travel_explore", os.path.exists(_run_path("crawl_result.json")) and os.path.exists(_run_path("targets.json"))),
         ("payload", "페이로드", "psychology", os.path.exists(PAYLOADS_FILE)),
-        ("fuzz", "퍼징 전략", "pest_control", os.path.exists(_run_path("fuzz_tasks.json"))),
+        ("probe", "주입 테스트 준비", "radar", os.path.exists(_run_path("probe_tasks.json"))),
         ("execute", "실행기", "terminal", os.path.exists(_run_path("execution_results.json"))),
         ("validate", "분석기", "analytics", os.path.exists(_run_path("findings.json"))),
     ]
@@ -491,7 +491,7 @@ def run_detail(run_id):
         has_crawl="crawl_result.json" in files,
         has_targets="targets.json" in files,
         has_payload=os.path.exists(PAYLOADS_FILE),
-        has_fuzz="fuzz_tasks.json" in files,
+        has_probe="probe_tasks.json" in files,
         has_exec="execution_results.json" in files,
         has_findings="findings.json" in files,
         findings=findings,
