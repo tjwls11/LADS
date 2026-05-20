@@ -190,7 +190,7 @@ block content %}
               </span>
             </td>
             <td class="border-b border-slate-100 px-3 py-3">
-              {% set display_type = f.vuln_type or f.module or '' %}
+              {% set display_type = f.module or '' %}
               <span
                 class="rounded px-2 py-1 font-mono text-[12px] {% if 'xss' in display_type|lower %}bg-amber-100 text-amber-800 {% elif 'sql' in display_type|lower %}bg-red-100 text-red-800 {% elif 'misconfig' in display_type|lower %}bg-blue-100 text-blue-800 {% else %}bg-slate-100 text-slate-700{% endif %}"
               >

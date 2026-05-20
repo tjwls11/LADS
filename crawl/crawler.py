@@ -12,7 +12,7 @@ import requests
 from bs4 import BeautifulSoup  # type: ignore[reportMissingModuleSource]
 from dotenv import load_dotenv
 
-from crawl.auth import LOGIN_URL, login as _do_login
+from crawl.auth import login as _do_login
 
 load_dotenv()
 
@@ -197,7 +197,7 @@ class Crawler:
 
     def crawl(self, extra_seeds: list[str] | None = None, progress_callback=None) -> list[PageResult]:
         # 로그인 → 시드 URL 큐 적재 → BFS 크롤링 수행
-        if os.getenv("LOGIN_URL", LOGIN_URL):
+        if os.getenv("LOGIN_URL"):
             if not self.login():
                 print("[WARN] login failed; continuing anonymously", file=sys.stderr)
 

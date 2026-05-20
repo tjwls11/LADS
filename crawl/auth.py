@@ -83,16 +83,23 @@ def find_login_form(soup):
 
 def login(
     session: requests.Session,
-    url: str = LOGIN_URL,
-    method: str = LOGIN_METHOD,
-    login_id: str = LOGIN_ID,    
-    login_password: str = LOGIN_PASSWORD, 
-    success_url_keyword: str = LOGIN_SUCCESS_URL_KEYWORD,
-    fail_indicator: str = LOGIN_FAIL_INDICATOR,
+    url: str = "",
+    method: str = "",
+    login_id: str = "",
+    login_password: str = "",
+    success_url_keyword: str = "",
+    fail_indicator: str = "",
     timeout: int = _TIMEOUT,
 ) -> tuple[bool, dict]:
 
-    # 로그인 수행, (성공 여부, 쿠키) 반환 — 실패 시 (False, {})
+    # 빈 값이면 호출 시점의 환경 변수에서 읽음 (모듈 임포트 시점 값 X)
+    url                  = url                  or os.getenv("LOGIN_URL", "")
+    method               = method               or os.getenv("LOGIN_METHOD", "POST").upper()
+    login_id             = login_id             or os.getenv("LOGIN_ID", "")
+    login_password       = login_password       or os.getenv("LOGIN_PASSWORD", "")
+    success_url_keyword  = success_url_keyword  or os.getenv("LOGIN_SUCCESS_URL_KEYWORD", "")
+    fail_indicator       = fail_indicator       or os.getenv("LOGIN_FAIL_INDICATOR", "")
+
     if not url:
         return False, {}
 
@@ -186,17 +193,18 @@ def _make_session() -> requests.Session:
     return s
 
 
-# 역할별 세션 쿠키 반환
-def login_all_roles(
-    url: str = LOGIN_URL,
-    method: str = LOGIN_METHOD,
-    success_url_keyword: str = LOGIN_SUCCESS_URL_KEYWORD,
-    fail_indicator: str = LOGIN_FAIL_INDICATOR,
-    timeout: int = _TIMEOUT,
-) -> dict[str, dict]:
+# 역할별 세션 쿠키 반환 — 모든 자격증명을 호출 시점 env에서 읽음
+def login_all_roles(timeout: int = _TIMEOUT) -> dict[str, dict]:
+    url                 = os.getenv("LOGIN_URL", "")
+    method              = os.getenv("LOGIN_METHOD", "POST").upper()
+    success_url_keyword = os.getenv("LOGIN_SUCCESS_URL_KEYWORD", "")
+    fail_indicator      = os.getenv("LOGIN_FAIL_INDICATOR", "")
+    login_id            = os.getenv("LOGIN_ID", "")
+    login_password      = os.getenv("LOGIN_PASSWORD", "")
+    admin_id            = os.getenv("ADMIN_ID", "")
+    admin_password      = os.getenv("ADMIN_PASSWORD", "")
 
     roles: dict[str, dict] = {"guest": {}}
-
     common = dict(
         url=url, method=method,
         success_url_keyword=success_url_keyword,
@@ -204,18 +212,18 @@ def login_all_roles(
         timeout=timeout,
     )
 
-    if LOGIN_ID:
+    if login_id:
         s = _make_session()
-        ok, cookies = login(s, login_id=LOGIN_ID, login_password=LOGIN_PASSWORD, **common)
+        ok, cookies = login(s, login_id=login_id, login_password=login_password, **common)
         if ok:
             roles["member"] = cookies
             print(f"[AUTH - OK] member 로그인 성공: {len(cookies)} cookies")
         else:
             print("[AUTH - FAIL] member 로그인 실패. 스킵합니다", file=sys.stderr)
 
-    if ADMIN_ID:
+    if admin_id:
         s = _make_session()
-        ok, cookies = login(s, login_id=ADMIN_ID, login_password=ADMIN_PASSWORD, **common)
+        ok, cookies = login(s, login_id=admin_id, login_password=admin_password, **common)
         if ok:
             roles["admin"] = cookies
             print(f"[AUTH - OK] admin 로그인 성공: {len(cookies)} cookies")

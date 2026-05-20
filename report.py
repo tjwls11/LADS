@@ -36,9 +36,9 @@ def generate(run_id: str, run_dir: str) -> bytes:
     except Exception:
         ts = run_id
 
-    xss_cnt  = sum(1 for f in findings if "xss"  in (f.get("vuln_type") or "").lower())
-    sqli_cnt = sum(1 for f in findings if "sql"  in (f.get("vuln_type") or "").lower())
-    bac_cnt  = sum(1 for f in findings if "bac"  in (f.get("vuln_type") or "").lower())
+    xss_cnt  = sum(1 for f in findings if f.get("module") == "xss")
+    sqli_cnt = sum(1 for f in findings if f.get("module") == "sqli")
+    bac_cnt  = sum(1 for f in findings if f.get("module") == "bac")
     other_cnt = len(findings) - xss_cnt - sqli_cnt - bac_cnt
 
     pdf = FPDF()

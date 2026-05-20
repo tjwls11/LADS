@@ -24,6 +24,12 @@ import os
 from .sqli_analyzer import validate_sqli, detect_boolean_group
 from .xss_analyzer  import validate_xss
 from .bac_analyzer  import validate_bac
+from findings import (
+    make_finding,
+    MODULE_XSS, MODULE_SQLI, MODULE_BAC,
+    XSS_CONFIRMED, SQLI_CONFIRMED, BAC_SUSPECTED_MEDIUM,
+    HIGH,
+)
 
 __all__ = [
     "run", "validate",
@@ -37,21 +43,53 @@ def _vuln_type(r: dict) -> str:
     return ((r.get("meta") or {}).get("vuln_type") or "").lower()
 
 
+def _derive_module_type(vt: str) -> tuple[str, str]:
+    if "xss" in vt:
+        return MODULE_XSS, XSS_CONFIRMED
+    if "sqli" in vt or "sql" in vt:
+        return MODULE_SQLI, SQLI_CONFIRMED
+    if "bac" in vt or "broken_access" in vt or "auth" in vt:
+        return MODULE_BAC, BAC_SUSPECTED_MEDIUM
+    return MODULE_XSS, XSS_CONFIRMED
+
+
+def _derive_category(vt: str, evidence: str) -> str:
+    ev = evidence.lower()
+    if "time" in ev:
+        return "time_based"
+    if "error" in ev or "db 에러" in ev:
+        return "error_based"
+    if "boolean" in ev:
+        return "boolean"
+    if any(x in vt for x in ("subject", "content", "comment")):
+        return "stored"
+    if "search" in vt or "reflected" in vt:
+        return "reflected"
+    return "unknown"
+
+
 def _make_finding(r: dict, evidence: str) -> dict:
     meta = r.get("meta") or {}
-    return {
-        "id":          r.get("id"),
-        "point":       r.get("point"),
-        "url":         r.get("url"),
-        "method":      r.get("method"),
-        "param":       r.get("inject_param"),
-        "payload":     r.get("payload") or "",
-        "inject_mode": r.get("inject_mode"),
-        "vuln_type":   meta.get("vuln_type"),
-        "status":      r.get("status"),
-        "elapsed":     r.get("elapsed") or 0.0,
-        "evidence":    evidence,
-    }
+    vt   = (meta.get("vuln_type") or "").lower()
+    module, type_ = _derive_module_type(vt)
+    category      = _derive_category(vt, evidence)
+
+    f = make_finding(
+        module=module,
+        type=type_,
+        category=category,
+        url=r.get("url") or "",
+        param=r.get("inject_param"),
+        payload=r.get("payload") or "",
+        status=r.get("status"),
+        confidence=HIGH,
+        evidence=evidence,
+    )
+    f["id"]          = r.get("id")
+    f["point"]       = r.get("point")
+    f["inject_mode"] = r.get("inject_mode")
+    f["elapsed"]     = r.get("elapsed") or 0.0
+    return f
 
 
 # ── Phase 1: 단건 판정 라우팅 ────────────────────────────────────

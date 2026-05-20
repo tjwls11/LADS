@@ -372,8 +372,8 @@ def findings_page():
         except Exception as exc:
             return f"결과 파일 읽기 오류: {exc}", 500
 
-    xss_cnt       = sum(1 for f in findings if "xss" in (f.get("vuln_type") or "").lower())
-    sqli_cnt      = sum(1 for f in findings if "sql" in (f.get("vuln_type") or "").lower())
+    xss_cnt       = sum(1 for f in findings if f.get("module") == "xss")
+    sqli_cnt      = sum(1 for f in findings if f.get("module") == "sqli")
     misconfig_cnt = sum(1 for f in findings if f.get("module") == "misconfig")
 
     all_results = []
@@ -387,7 +387,7 @@ def findings_page():
                 hit = findings_by_id.get(r.get("id"))
                 r["_vulnerable"] = hit is not None
                 r["_evidence"] = hit.get("evidence", "") if hit else ""
-                r["_vuln_type"] = hit.get("vuln_type", "") if hit else (r.get("meta") or {}).get("vuln_type", "")
+                r["_vuln_type"] = hit.get("module", "") if hit else (r.get("meta") or {}).get("vuln_type", "")
             all_results = exec_results
             safe_cnt = sum(1 for r in all_results if not r.get("_vulnerable") and not r.get("error"))
         except Exception:
@@ -542,8 +542,8 @@ def run_detail(run_id):
         try:
             with open(os.path.join(run_dir, "findings.json"), encoding="utf-8") as f:
                 findings = json.load(f)
-            xss_cnt = sum(1 for fi in findings if "xss" in (fi.get("vuln_type") or "").lower())
-            sqli_cnt = sum(1 for fi in findings if "sql" in (fi.get("vuln_type") or "").lower())
+            xss_cnt = sum(1 for fi in findings if fi.get("module") == "xss")
+            sqli_cnt = sum(1 for fi in findings if fi.get("module") == "sqli")
         except Exception:
             pass
 
