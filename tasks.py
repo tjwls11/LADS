@@ -14,7 +14,7 @@ TASK_LABELS = {
 
 def _task_crawl(run_path_fn, target_url, emit_progress=None):
     from crawl.crawler import Crawler
-    from crawl.target_builder import build_targets, print_summary
+    from crawl.target_builder import build_targets
 
     def _prog(n):
         if emit_progress: emit_progress(n)
@@ -57,7 +57,6 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     with open(targets_file, "w", encoding="utf-8") as f:
         json.dump(targets, f, ensure_ascii=False, indent=2)
     print(f"[CRAWL] targets saved: {targets_file} ({len(targets)})")
-    print_summary(targets)
 
 
 def _task_payload(payloads_file, emit_progress=None):

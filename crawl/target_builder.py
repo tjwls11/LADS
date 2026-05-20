@@ -118,42 +118,6 @@ def build_targets(pages: list[dict]) -> list[dict]:
     return targets
 
 
-# --- 요약 출력
-
-def print_summary(targets: list[dict]) -> None:
-    url_t  = [t for t in targets if t["type"] == "url_param"]
-    form_t = [t for t in targets if t["type"] == "form"]
-    post_t = [t for t in form_t  if t["method"] == "POST"]
-    get_t  = [t for t in form_t  if t["method"] == "GET"]
-
-    total_injectable = sum(
-        sum(1 for p in t["params"] if p["injectable"])
-        for t in targets
-    )
-
-    sep = "=" * 60
-    print(f"\n{sep}")
-    print("공격 표면 분석 결과")
-    print(sep)
-    print(f"총 타겟                : {len(targets)}")
-    print(f"  URL 파라미터 타겟    : {len(url_t)}")
-    print(f"  Form 타겟            : {len(form_t)}")
-    print(f"    POST form          : {len(post_t)}")
-    print(f"    GET form           : {len(get_t)}")
-    print(f"주입 가능 파라미터 합계: {total_injectable}")
-    print()
-
-    for t in targets:
-        inj = [p["name"] for p in t["params"] if p["injectable"]]
-        skip = [p["name"] for p in t["params"] if not p["injectable"]]
-        print(f"  [{t['id']}] {t['method']} {t['action']}")
-        if inj:
-            print(f"           inject : {inj}")
-        if skip:
-            print(f"           skip   : {skip}")
-
-
-
 if __name__ == "__main__":
     try:
         with open(INPUT_FILE, encoding="utf-8") as f:
@@ -172,7 +136,6 @@ if __name__ == "__main__":
         json.dump(targets, f, ensure_ascii=False, indent=2)
 
     print(f"저장 완료: {OUTPUT_FILE}  ({len(targets)}개 타겟)")
-    print_summary(targets)
     try:
         from pause_on_exit import pause_if_enabled
         pause_if_enabled()
