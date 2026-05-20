@@ -372,8 +372,9 @@ def findings_page():
         except Exception as exc:
             return f"결과 파일 읽기 오류: {exc}", 500
 
-    xss_cnt = sum(1 for f in findings if "xss" in (f.get("vuln_type") or "").lower())
-    sqli_cnt = sum(1 for f in findings if "sql" in (f.get("vuln_type") or "").lower())
+    xss_cnt       = sum(1 for f in findings if "xss" in (f.get("vuln_type") or "").lower())
+    sqli_cnt      = sum(1 for f in findings if "sql" in (f.get("vuln_type") or "").lower())
+    misconfig_cnt = sum(1 for f in findings if f.get("module") == "misconfig")
 
     all_results = []
     safe_cnt = 0
@@ -392,11 +393,27 @@ def findings_page():
         except Exception:
             pass
 
+    for mf in findings:
+        if mf.get("module") != "misconfig":
+            continue
+        all_results.append({
+            "_vulnerable": True,
+            "_evidence":   mf.get("evidence", ""),
+            "_vuln_type":  "misconfig",
+            "url":         mf.get("url", ""),
+            "method":      "GET",
+            "inject_param": None,
+            "payload":     "",
+            "status":      mf.get("status"),
+            "error":       None,
+        })
+
     return render_template(
         "findings.html",
         findings=findings,
         xss_cnt=xss_cnt,
         sqli_cnt=sqli_cnt,
+        misconfig_cnt=misconfig_cnt,
         safe_cnt=safe_cnt,
         all_results=all_results,
         run_id=run_id,

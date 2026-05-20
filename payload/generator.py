@@ -209,8 +209,3 @@ if __name__ == "__main__":
     parser.add_argument("--out", default="results/payloads_llm.json")
     args = parser.parse_args()
     run(args.out)
-    try:
-        from pause_on_exit import pause_if_enabled
-        pause_if_enabled()
-    except Exception:
-        pass

@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime
 
-from fpdf import FPDF
+from fpdf import FPDF  # pyright: ignore[reportMissingModuleSource]
 
 
 VULN_LABELS = {
