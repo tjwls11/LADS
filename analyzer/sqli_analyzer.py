@@ -1,11 +1,3 @@
-"""
-단건:
-    Time-based  : elapsed >= SLEEP_THRESHOLD
-    Error-based : 응답 본문에 DB 에러 시그니처 노출
-
-그룹:
-    Boolean(그룹): 같은 (point, inject_param, url, ) 묶음에서 TRUE/FALSE 페이로드 응답 길이 차이 >= 5% 이면 취약
-"""
 from __future__ import annotations
 
 import re
