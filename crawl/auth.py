@@ -14,7 +14,6 @@ LOGIN_URL = os.getenv("LOGIN_URL", "")
 LOGIN_METHOD = os.getenv("LOGIN_METHOD", "POST").upper()
 LOGIN_ID = os.getenv("LOGIN_ID", "")
 LOGIN_PASSWORD = os.getenv("LOGIN_PASSWORD", "")
-LOGIN_SUCCESS_URL_KEYWORD = os.getenv("LOGIN_SUCCESS_URL_KEYWORD", "")
 LOGIN_FAIL_INDICATOR = os.getenv("LOGIN_FAIL_INDICATOR", "")
 
 # BAC 멀티 세션용 관리자 계정
@@ -87,7 +86,6 @@ def login(
     method: str = LOGIN_METHOD,
     login_id: str = LOGIN_ID,    
     login_password: str = LOGIN_PASSWORD, 
-    success_url_keyword: str = LOGIN_SUCCESS_URL_KEYWORD,
     fail_indicator: str = LOGIN_FAIL_INDICATOR,
     timeout: int = _TIMEOUT,
 ) -> tuple[bool, dict]:
@@ -96,7 +94,6 @@ def login(
     if not url:
         return False, {}
 
-    success_url_keyword = success_url_keyword.lower()
     fail_indicator = fail_indicator.lower()
 
     try:
@@ -139,31 +136,27 @@ def login(
     cookies = session.cookies.get_dict()
     new_cookies = set(cookies.keys()) - pre_cookies
     body_lower = post_resp.text.lower()
-    final_url_lower = post_resp.url.lower()
 
     post_soup = BeautifulSoup(post_resp.text, "lxml")
     form_reappeared = bool(find_login_form(post_soup))
     url_changed = post_resp.url.rstrip("/") != url.rstrip("/")
 
-    # 1) 사용자 지정 indicator — 가장 명확한 신호라 최우선
+    # 1) 사용자 지정 Fail indicator (optional, 설정된 경우만 동작)
     if fail_indicator and fail_indicator in body_lower:
         print("[LOGIN] failed by fail indicator", file=sys.stderr)
         return False, {}
-    if success_url_keyword and success_url_keyword in final_url_lower:
-        print(f"[LOGIN] success by URL keyword, cookies={len(cookies)}")
-        return True, cookies
 
-    # 2) 구조적 강한 실패: 같은 URL에 로그인 폼이 다시 출현
+    # 2) 실패: 같은 URL에 로그인 폼이 다시 출현
     if form_reappeared and not url_changed:
         print("[LOGIN] failed: login form re-appeared on same URL", file=sys.stderr)
         return False, {}
 
-    # 3) 구조적 강한 성공: 폼 사라짐 + URL 변경 + 새 쿠키
+    # 3) 성공 : 폼 사라짐 + URL 변경 + 새 쿠키
     if not form_reappeared and url_changed and new_cookies:
         print(f"[LOGIN] success by structural signals, cookies={len(cookies)}")
         return True, cookies
 
-    # 4) 약한 성공 신호: 위 조건 중 하나만 만족
+    # 4) 약한 성공: 위 조건 중 하나만 만족
     if not form_reappeared and (url_changed or new_cookies):
         print(f"[LOGIN] success assumed (weak signal), cookies={len(cookies)}")
         return True, cookies
@@ -190,7 +183,6 @@ def _make_session() -> requests.Session:
 def login_all_roles(
     url: str = LOGIN_URL,
     method: str = LOGIN_METHOD,
-    success_url_keyword: str = LOGIN_SUCCESS_URL_KEYWORD,
     fail_indicator: str = LOGIN_FAIL_INDICATOR,
     timeout: int = _TIMEOUT,
 ) -> dict[str, dict]:
@@ -199,7 +191,6 @@ def login_all_roles(
 
     common = dict(
         url=url, method=method,
-        success_url_keyword=success_url_keyword,
         fail_indicator=fail_indicator,
         timeout=timeout,
     )

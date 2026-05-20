@@ -12,7 +12,6 @@ import requests
 from bs4 import BeautifulSoup  # type: ignore[reportMissingModuleSource]
 from dotenv import load_dotenv
 
-from crawl.auth import LOGIN_URL, login as _do_login
 
 load_dotenv()
 
@@ -20,19 +19,6 @@ load_dotenv()
 BASE_URL = os.getenv("TARGET_URL", "http://localhost:8080")
 OUTPUT_FILE = os.getenv("OUTPUT_FILE", "results/crawl_result.json")
 
-# 크롤링 시작점 (그누보드 기준 주요 경로)
-SEED_PATHS = [
-    "/",
-    "/bbs/login.php",
-    "/bbs/register.php",
-    "/bbs/faq.php",
-    "/bbs/qalist.php",
-    "/adm/",
-    "/bbs/board.php",
-    "/bbs/write.php",
-    "/bbs/search.php",
-    "/bbs/memo.php",
-]
 
 # 크롤링에서 제외할 URL 패턴 (로그아웃, 정적 파일 등)
 EXCLUDE_PATTERNS = [
@@ -89,7 +75,7 @@ class PageResult:
 # 크롤러
 # =============================================================================
 class Crawler:
-    def __init__(self, base_url: str = BASE_URL):
+    def __init__(self, base_url: str = BASE_URL, init_cookies: dict | None = None):
         self.base_url = base_url.rstrip("/")
         self.parsed_base = urlparse(self.base_url)
         self.session = requests.Session()
@@ -103,6 +89,8 @@ class Crawler:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
         })
+
+        self.init_cookies: dict | None = init_cookies
         self.auth_cookies: dict = {}
         self.visited: set[str] = set()           # 이미 방문한 URL
         self.queue: deque[str] = deque()          # 방문 예정 URL 큐
@@ -161,26 +149,8 @@ class Crawler:
             print(f"[ERROR] fetch failed: {url} ({exc})", file=sys.stderr)
             return None
 
-
-    # ==========================================================================
-    # 로그인
-    # ==========================================================================
-    def login(self) -> bool:
-        # auth.py의 login() 호출 후 쿠키를 인스턴스에 저장
-        success, cookies = _do_login(self.session)
-        if success:
-            self.auth_cookies = cookies
-        return success
-
-    def _discover_seeds(self) -> list[str]:
-        # SEED_PATHS를 base_url에 붙여 초기 방문 URL 목록 생성
-        seeds = {self._normalize(self.base_url + "/")}
-        for path in SEED_PATHS:
-            seeds.add(self._normalize(urljoin(self.base_url + "/", path)))
-        return list(seeds)
-
+    # <form> 태그에서 action, method, 필드 목록 추출
     def _parse_form(self, form_tag, page_url: str) -> Form:
-        # <form> 태그에서 action, method, 필드 목록 추출
         action = urljoin(page_url, form_tag.get("action") or page_url)
         method = (form_tag.get("method") or "GET").upper()
         enctype = form_tag.get("enctype") or "application/x-www-form-urlencoded"
@@ -196,15 +166,12 @@ class Crawler:
         return Form(action=action, method=method, fields=fields, enctype=enctype)
 
     def crawl(self, extra_seeds: list[str] | None = None, progress_callback=None) -> list[PageResult]:
-        # 로그인 → 시드 URL 큐 적재 → BFS 크롤링 수행
-        if os.getenv("LOGIN_URL", LOGIN_URL):
-            if not self.login():
-                print("[WARN] login failed; continuing anonymously", file=sys.stderr)
+        if self.init_cookies is not None:
+            self.session.cookies.update(self.init_cookies)
+            self.auth_cookies = dict(self.init_cookies)
 
-        seeds = self._discover_seeds()
-        if extra_seeds:
-            seeds.extend(extra_seeds)
-        for seed in seeds:
+        self.queue.append(self._normalize(self.base_url + "/"))
+        for seed in (extra_seeds or []):
             self.queue.append(seed)
 
         crawled = 0

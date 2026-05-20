@@ -64,13 +64,14 @@ def build_targets(pages: list[dict]) -> list[dict]:
                 seen.add(sig)
                 tid += 1
                 targets.append({
-                    "id":         f"url_{tid:04d}",
-                    "type":       "url_param",
-                    "source_url": source,
-                    "action":     base,
-                    "method":     "GET",
-                    "enctype":    "application/x-www-form-urlencoded",
-                    "params":     params,
+                    "id":            f"url_{tid:04d}",
+                    "type":          "url_param",
+                    "source_url":    source,
+                    "action":        base,
+                    "method":        "GET",
+                    "enctype":       "application/x-www-form-urlencoded",
+                    "accessible_by": page.get("accessible_by", []),
+                    "params":        params,
                 })
 
         # 2. HTML Form
@@ -112,6 +113,7 @@ def build_targets(pages: list[dict]) -> list[dict]:
                     "method":             method,
                     "enctype":            form.get("enctype", "application/x-www-form-urlencoded"),
                     "needs_csrf_refresh": needs_csrf,
+                    "accessible_by":      page.get("accessible_by", []),
                     "params":             params,
                 })
 
