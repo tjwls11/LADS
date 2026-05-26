@@ -294,13 +294,26 @@ def _get_exec_summary():
         return None
 
 
+def _misconfig_done() -> bool:
+    p = _run_path("findings.json")
+    if not os.path.exists(p):
+        return False
+    try:
+        with open(p, encoding="utf-8") as f:
+            findings = json.load(f)
+        return any(fi.get("module") == "misconfig" for fi in findings)
+    except Exception:
+        return False
+
+
 def _get_pipeline_steps():
     checks = [
-        ("crawl", "크롤러", "travel_explore", os.path.exists(_run_path("crawl_result.json")) and os.path.exists(_run_path("targets.json"))),
-        ("payload", "페이로드", "psychology", os.path.exists(PAYLOADS_FILE)),
-        ("probe", "주입 테스트 준비", "radar", os.path.exists(_run_path("probe_tasks.json"))),
-        ("execute", "실행기", "terminal", os.path.exists(_run_path("execution_results.json"))),
-        ("validate", "분석기", "analytics", os.path.exists(_run_path("findings.json"))),
+        ("crawl",     "크롤러",        "travel_explore", os.path.exists(_run_path("crawl_result.json")) and os.path.exists(_run_path("targets.json"))),
+        ("payload",   "페이로드",       "psychology",     os.path.exists(PAYLOADS_FILE)),
+        ("probe",     "주입 테스트 준비", "radar",          os.path.exists(_run_path("probe_tasks.json"))),
+        ("execute",   "실행기",         "terminal",       os.path.exists(_run_path("execution_results.json"))),
+        ("validate",  "분석기",         "analytics",      os.path.exists(_run_path("findings.json"))),
+        ("misconfig", "설정 오류 점검",  "policy",         _misconfig_done()),
     ]
     active_assigned = False
     steps = []
@@ -373,8 +386,9 @@ def findings_page():
         except Exception as exc:
             return f"결과 파일 읽기 오류: {exc}", 500
 
-    xss_cnt = sum(1 for f in findings if "xss" in (f.get("vuln_type") or "").lower())
-    sqli_cnt = sum(1 for f in findings if "sql" in (f.get("vuln_type") or "").lower())
+    xss_cnt       = sum(1 for f in findings if f.get("module") == "xss")
+    sqli_cnt      = sum(1 for f in findings if f.get("module") == "sqli")
+    misconfig_cnt = sum(1 for f in findings if f.get("module") == "misconfig")
 
     all_results = []
     safe_cnt = 0
@@ -387,17 +401,33 @@ def findings_page():
                 hit = findings_by_id.get(r.get("id"))
                 r["_vulnerable"] = hit is not None
                 r["_evidence"] = hit.get("evidence", "") if hit else ""
-                r["_vuln_type"] = hit.get("vuln_type", "") if hit else (r.get("meta") or {}).get("vuln_type", "")
+                r["_vuln_type"] = hit.get("module", "") if hit else (r.get("meta") or {}).get("vuln_type", "")
             all_results = exec_results
             safe_cnt = sum(1 for r in all_results if not r.get("_vulnerable") and not r.get("error"))
         except Exception:
             pass
+
+    for mf in findings:
+        if mf.get("module") != "misconfig":
+            continue
+        all_results.append({
+            "_vulnerable": True,
+            "_evidence":   mf.get("evidence", ""),
+            "_vuln_type":  "misconfig",
+            "url":         mf.get("url", ""),
+            "method":      "GET",
+            "inject_param": None,
+            "payload":     "",
+            "status":      mf.get("status"),
+            "error":       None,
+        })
 
     return render_template(
         "findings.html",
         findings=findings,
         xss_cnt=xss_cnt,
         sqli_cnt=sqli_cnt,
+        misconfig_cnt=misconfig_cnt,
         safe_cnt=safe_cnt,
         all_results=all_results,
         run_id=run_id,
@@ -466,6 +496,7 @@ def settings_page():
     saved = False
     if request.method == "POST":
         updates = {
+            "LOGIN_URL":            request.form.get("login_url", ""),
             "LOGIN_ID":             request.form.get("login_id", ""),
             "LOGIN_PASSWORD":       request.form.get("login_password", ""),
             "ADMIN_ID":             request.form.get("admin_id", ""),
@@ -478,6 +509,7 @@ def settings_page():
     return render_template(
         "settings.html",
         saved=saved,
+        login_url=os.getenv("LOGIN_URL", ""),
         login_id=os.getenv("LOGIN_ID", ""),
         login_password=os.getenv("LOGIN_PASSWORD", ""),
         admin_id=os.getenv("ADMIN_ID", ""),
@@ -526,8 +558,8 @@ def run_detail(run_id):
         try:
             with open(os.path.join(run_dir, "findings.json"), encoding="utf-8") as f:
                 findings = json.load(f)
-            xss_cnt = sum(1 for fi in findings if "xss" in (fi.get("vuln_type") or "").lower())
-            sqli_cnt = sum(1 for fi in findings if "sql" in (fi.get("vuln_type") or "").lower())
+            xss_cnt = sum(1 for fi in findings if fi.get("module") == "xss")
+            sqli_cnt = sum(1 for fi in findings if fi.get("module") == "sqli")
         except Exception:
             pass
 
@@ -584,6 +616,25 @@ def delete_run(run_id):
         if _current_run_id == run_id:
             _init_run()
     return redirect("/runs")
+
+
+@app.route("/runs/<run_id>/report.pdf")
+def download_report(run_id):
+    from flask import send_file
+    import io
+    import report as report_gen
+
+    run_dir = os.path.join(RUNS_DIR, run_id)
+    if not os.path.isdir(run_dir):
+        return "Run not found", 404
+
+    pdf_bytes = report_gen.generate(run_id, run_dir)
+    return send_file(
+        io.BytesIO(pdf_bytes),
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=f"LADS_{run_id}.pdf",
+    )
 
 
 if __name__ == "__main__":
