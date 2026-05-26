@@ -27,32 +27,54 @@ DB_ERROR_KEYWORDS = (
     "table 'g5_",
 )
 
-# Boolean 분석 후보 (느슨하게)
+# ── Boolean TRUE/FALSE 명시적 패턴 ────────────────────────────────
+# 페이로드 텍스트만 보고 true인지 false인지 판단 가능한 것들
 _BOOL_TRUE = re.compile(
-    r"1\s*=\s*1|'\s*([a-z0-9])\s*'\s*=\s*'\s*\1|\bor\s+1\b|\band\s+1\s*=\s*1|\btrue\b|length\(.+\)\s*>\s*0|exists\s*\(|case\s+when\s*\(\s*1\s*=\s*1",
+    r"1\s*=\s*1"
+    r"|'\s*([a-z0-9])\s*'\s*=\s*'\s*\1"          # 'a'='a'
+    r"|\bor\s+1\b"
+    r"|\band\s+1\s*=\s*1"
+    r"|\btrue\b"
+    r"|length\(.+\)\s*>\s*0"
+    r"|exists\s*\("
+    r"|case\s+when\s*\(\s*1\s*=\s*1",
     re.IGNORECASE,
 )
 _BOOL_FALSE = re.compile(
-    r"1\s*=\s*2|1\s*=\s*0|\band\s+1\s*=\s*2|\bfalse\b|\band\s+0\b|case\s+when\s*\(\s*1\s*=\s*2",
+    r"1\s*=\s*2"
+    r"|1\s*=\s*0"
+    r"|\band\s+1\s*=\s*2"
+    r"|\bfalse\b"
+    r"|\band\s+0\b"
+    r"|case\s+when\s*\(\s*1\s*=\s*2",
     re.IGNORECASE,
 )
 
-# ORDER BY 패턴
+# ── Boolean Blind 정찰 패턴 (true/false 모호) ────────────────────
+# 단일 페이로드만 보고는 true/false를 모르지만, SQLi 정찰 의도가 명확한 것들
+# (ASCII, SUBSTRING, MID, REGEXP, LENGTH=N 등 — payload/baseline/sqli.py 참고)
+_BOOL_PROBE = re.compile(
+    r"ascii\(.+\)\s*[=><]"                       # ascii(substring(...))>64
+    r"|(?:substr|substring|mid)\([^)]+\)\s*[=><]"  # substring(db,1,1)='a'
+    r"|length\(.+\)\s*=\s*\d+"                   # length(db)=6
+    r"|.+\s+regexp\s+",                          # MID(...) REGEXP '^[a-z]'
+    re.IGNORECASE,
+)
+
+# ── ORDER BY 인젝션 패턴 ──────────────────────────────────────────
 _ORDERBY_INJECT = re.compile(r"order\s+by\s+(?:\d+|\(|\w+\s*,)", re.IGNORECASE)
 _ORDERBY_NUM = re.compile(r"order\s+by\s+(\d+)", re.IGNORECASE)
 
 
 def _is_group_candidate(payload: str) -> bool:
-    """
-    이 페이로드는 그룹 분석 대상인가?
-    Boolean true/false 페어나 ORDER BY 페이로드는 단건 Error 판정을 보류하고
-    그룹 분석에서 처리하도록 양보한다.
-    """
+    """단건 Error 판정을 보류하고 그룹 분석에 양보할 페이로드인가?"""
     if not payload:
         return False
     if _BOOL_TRUE.search(payload):
         return True
     if _BOOL_FALSE.search(payload):
+        return True
+    if _BOOL_PROBE.search(payload):
         return True
     if _ORDERBY_INJECT.search(payload):
         return True
@@ -86,6 +108,13 @@ def _body_length(r: dict) -> int:
     return len(body)
 
 
+def _has_db_error(body: str) -> bool:
+    """응답 본문에 DB 에러 시그니처가 포함되어 있는가? (소문자 변환된 body 기대)"""
+    if not body:
+        return False
+    return any(sig in body for sig in DB_ERROR_KEYWORDS)
+
+
 def _check_time_based(elapsed: float) -> Optional[str]:
     if elapsed >= SLEEP_THRESHOLD:
         return f"Time-based SQLi (응답 지연 {elapsed:.2f}s >= {SLEEP_THRESHOLD}s)"
@@ -102,6 +131,8 @@ def _check_error_based(body: str) -> Optional[str]:
     return None
 
 
+# ── 단건 판정 ────────────────────────────────────────────────────
+
 def validate_sqli(test_result: dict) -> tuple[bool, str]:
     """단건 판정 — 그룹 후보는 보류"""
     if not test_result:
@@ -117,8 +148,6 @@ def validate_sqli(test_result: dict) -> tuple[bool, str]:
         return True, msg
 
     # 그룹 분석 후보 페이로드는 단건 Error 판정 보류
-    # (이 환경에서는 그누보드처럼 모든 SQL에 같은 에러를 주므로,
-    #  Boolean true/false나 ORDER BY는 그룹에서 응답 차이로 판정하는 게 정확)
     payload = test_result.get("payload") or ""
     if _is_group_candidate(payload):
         return False, "그룹 분석 대상 (Phase 2로 위임)"
@@ -131,8 +160,18 @@ def validate_sqli(test_result: dict) -> tuple[bool, str]:
     return False, "안전함 (SQLi 시그니처 미검출)"
 
 
+# ── Phase 2: 그룹 단위 Boolean SQLi 판정 ─────────────────────────
+
 def detect_boolean_group(results: list[dict]) -> list[dict]:
-    """그룹 단위 Boolean SQLi 판정"""
+    """
+    그룹 단위 Boolean SQLi 판정.
+
+    판정 단계 (강도 순):
+      [confirmed] TRUE+FALSE 짝 있고 응답 차이 >= 5%
+      [suspected] TRUE+FALSE 짝 있고 응답 동일 + DB 에러 시그니처 동반
+      [candidate] TRUE+FALSE 짝 있지만 응답 동일, DB 에러 없음
+      [candidate] TRUE 또는 FALSE 한쪽만 있음
+    """
     sqli_results = [
         r for r in results
         if not r.get("error")
@@ -140,9 +179,10 @@ def detect_boolean_group(results: list[dict]) -> list[dict]:
         and ("sqli" in _vuln_type(r) or "sql" in _vuln_type(r))
     ]
 
+    # (url, param) 단위로 묶음 — 같은 약점이면 mode 무시하고 한 그룹
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in sqli_results:
-        key = (r.get("point"), r.get("inject_param"), r.get("url"), r.get("inject_mode"))
+        key = (r.get("url"), r.get("inject_param"))
         groups[key].append(r)
 
     detected: list[dict] = []
@@ -156,31 +196,135 @@ def detect_boolean_group(results: list[dict]) -> list[dict]:
             if _BOOL_FALSE.search(payload):
                 false_items.append(r)
 
-        if not true_items or not false_items:
+        # ── 케이스 1: TRUE + FALSE 짝 존재 ────────────────────────
+        if true_items and false_items:
+            avg_true  = sum(_body_length(r) for r in true_items)  / len(true_items)
+            avg_false = sum(_body_length(r) for r in false_items) / len(false_items)
+            max_len   = max(avg_true, avg_false, 1)
+            diff      = abs(avg_true - avg_false) / max_len
+
+            # [confirmed] 응답 차이 명확
+            if diff >= BOOL_GROUP_THRESHOLD:
+                direction = "true>false" if avg_true > avg_false else "true<false"
+                evidence = (
+                    f"Boolean-based SQLi (confirmed): "
+                    f"true_len={avg_true:.0f}, false_len={avg_false:.0f}, "
+                    f"diff={diff:.1%} ({direction})"
+                )
+                best = max(true_items, key=_body_length)
+                detected.append({"result": best, "evidence": evidence})
+                continue
+
+            # 응답 동일 → DB 에러 시그니처 동반 여부로 분기
+            sample_body = (true_items[0].get("response_body") or "").lower()
+            if _has_db_error(sample_body):
+                # [suspected] 동일 에러 페이지 + DB 에러 시그니처 → CMS 동일 에러 환경
+                evidence = (
+                    f"Boolean-based SQLi (suspected): "
+                    f"true {len(true_items)}개 / false {len(false_items)}개 시도, "
+                    f"응답 크기 동일 (diff={diff:.1%}) + DB 에러 시그니처 동반 → "
+                    f"CMS 동일 에러 페이지 환경 (그누보드 등)"
+                )
+            else:
+                # [candidate] 응답 동일하고 에러도 없음 → 약한 신호
+                evidence = (
+                    f"Boolean SQLi candidate: "
+                    f"true {len(true_items)}개 / false {len(false_items)}개 시도, "
+                    f"응답 동일 (diff={diff:.1%}), 수동 확인 필요"
+                )
+            best = true_items[0]
+            detected.append({"result": best, "evidence": evidence})
             continue
 
-        avg_true  = sum(_body_length(r) for r in true_items)  / len(true_items)
-        avg_false = sum(_body_length(r) for r in false_items) / len(false_items)
-        max_len   = max(avg_true, avg_false, 1)
-        diff      = abs(avg_true - avg_false) / max_len
+        # ── 케이스 2: 한쪽만 존재 → [candidate] ───────────────────
+        candidate_items = true_items or false_items
+        if candidate_items:
+            kind = "TRUE" if true_items else "FALSE"
+            sample_body = (candidate_items[0].get("response_body") or "").lower()
+            error_note = " + DB 에러 동반" if _has_db_error(sample_body) else ""
+            evidence = (
+                f"Boolean SQLi candidate ({kind} only): "
+                f"{len(candidate_items)}개 페이로드 시도, "
+                f"짝 페이로드 부재로 응답 비교 불가{error_note}"
+            )
+            best = candidate_items[0]
+            detected.append({"result": best, "evidence": evidence})
 
-        if diff < BOOL_GROUP_THRESHOLD:
+    return detected
+
+
+# ── Phase 2: 그룹 단위 Boolean Probe SQLi 판정 (신규) ────────────
+
+def detect_probe_group(results: list[dict]) -> list[dict]:
+    """
+    ASCII/SUBSTRING/MID/REGEXP/LENGTH=N 등 정찰 페이로드 전용 그룹 판정.
+
+    이 페이로드들은 단일로 봤을 땐 true/false 모호하지만, 같은 (url, param)에
+    여러 개가 모이면 SQLi 정찰 시도가 명백.
+    """
+    probe_results = [
+        r for r in results
+        if not r.get("error")
+        and r.get("response_body")
+        and ("sqli" in _vuln_type(r) or "sql" in _vuln_type(r))
+        and _BOOL_PROBE.search(r.get("payload") or "")
+    ]
+
+    if not probe_results:
+        return []
+
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for r in probe_results:
+        key = (r.get("url"), r.get("inject_param"))
+        groups[key].append(r)
+
+    detected: list[dict] = []
+
+    for _key, group in groups.items():
+        lengths = [_body_length(r) for r in group]
+        if not lengths:
             continue
 
-        direction = "true>false" if avg_true > avg_false else "true<false"
-        evidence = (
-            f"Boolean-based SQLi (group): true_len={avg_true:.0f}, false_len={avg_false:.0f}, "
-            f"diff={diff:.1%} ({direction})"
-        )
+        min_len, max_len_v = min(lengths), max(lengths)
+        diff = (max_len_v - min_len) / max(max_len_v, 1)
 
-        best = max(true_items, key=_body_length)
+        sample_body = (group[0].get("response_body") or "").lower()
+        has_error = _has_db_error(sample_body)
+
+        # 응답이 페이로드별로 분산 → confirmed
+        if diff >= BOOL_GROUP_THRESHOLD and len(group) >= 2:
+            evidence = (
+                f"Boolean Probe SQLi (confirmed): {len(group)}개 정찰 페이로드 응답 분산 "
+                f"(min={min_len}b, max={max_len_v}b, diff={diff:.1%})"
+            )
+        elif has_error:
+            evidence = (
+                f"Boolean Probe SQLi (suspected): {len(group)}개 정찰 페이로드 시도, "
+                f"응답 동일하지만 DB 에러 시그니처 동반"
+            )
+        else:
+            evidence = (
+                f"Boolean Probe SQLi candidate: {len(group)}개 정찰 페이로드 시도 "
+                f"(ASCII/SUBSTRING/MID/REGEXP 등), 응답 차이 없음"
+            )
+
+        best = max(group, key=_body_length)
         detected.append({"result": best, "evidence": evidence})
 
     return detected
 
 
+# ── Phase 2: 그룹 단위 ORDER BY SQLi 판정 ────────────────────────
+
 def detect_orderby_group(results: list[dict]) -> list[dict]:
-    """그룹 단위 ORDER BY SQLi 판정"""
+    """
+    ORDER BY SQLi 판정.
+
+    판정 단계:
+      [confirmed] 그룹 응답 분산 >= 10% 또는 'unknown column' 에러
+      [candidate] 그룹 있지만 응답 동일
+      [candidate] 단일 페이로드 (비교 baseline 없음)
+    """
     orderby_results = [
         r for r in results
         if not r.get("error")
@@ -193,13 +337,22 @@ def detect_orderby_group(results: list[dict]) -> list[dict]:
 
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in orderby_results:
-        key = (r.get("point"), r.get("inject_param"), r.get("url"), r.get("inject_mode"))
+        key = (r.get("url"), r.get("inject_param"))
         groups[key].append(r)
 
     detected: list[dict] = []
 
     for _key, group in groups.items():
+        # 단일 페이로드 → candidate
         if len(group) < 2:
+            if group:
+                sample_body = (group[0].get("response_body") or "").lower()
+                error_note = " + DB 에러 동반" if _has_db_error(sample_body) else ""
+                evidence = (
+                    f"ORDER BY SQLi candidate: 단일 페이로드 시도, "
+                    f"비교용 baseline 부족{error_note}"
+                )
+                detected.append({"result": group[0], "evidence": evidence})
             continue
 
         lengths = [_body_length(r) for r in group]
@@ -214,16 +367,24 @@ def detect_orderby_group(results: list[dict]) -> list[dict]:
             for r in group
         )
 
-        if diff < ORDERBY_DIFF_THRES and not has_error:
-            continue
-
-        evidence_extra = " + 'unknown column' 에러" if has_error else ""
-        evidence = (
-            f"ORDER BY SQLi (group): {len(group)}개 페이로드 응답 분산 "
-            f"(min={min_len}b, max={max_len_v}b, diff={diff:.1%}){evidence_extra}"
-        )
-
-        best = max(group, key=_body_length)
-        detected.append({"result": best, "evidence": evidence})
+        # [confirmed]
+        if diff >= ORDERBY_DIFF_THRES or has_error:
+            evidence_extra = " + 'unknown column' 에러" if has_error else ""
+            evidence = (
+                f"ORDER BY SQLi (confirmed): {len(group)}개 페이로드 응답 분산 "
+                f"(min={min_len}b, max={max_len_v}b, diff={diff:.1%}){evidence_extra}"
+            )
+            best = max(group, key=_body_length)
+            detected.append({"result": best, "evidence": evidence})
+        else:
+            # [candidate] 응답 동일
+            sample_body = (group[0].get("response_body") or "").lower()
+            db_note = " + DB 에러 동반" if _has_db_error(sample_body) else ""
+            evidence = (
+                f"ORDER BY SQLi candidate: {len(group)}개 페이로드 시도, "
+                f"응답 동일 (diff={diff:.1%}){db_note}"
+            )
+            best = group[0]
+            detected.append({"result": best, "evidence": evidence})
 
     return detected
