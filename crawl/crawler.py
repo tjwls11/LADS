@@ -28,6 +28,23 @@ EXCLUDE_PATTERNS = [
     r"\.(jpg|jpeg|png|gif|svg|ico|css|js|pdf|zip|woff|ttf|eot)(\?|$)",
 ]
 
+# 상태 변경 가능성 있는 링크 패턴 
+DANGER_LINK_PATTERNS = [
+    r"delete",
+    r"remove",
+    r"move",
+    r"copy",
+    r"update",
+    r"modify",
+    r"write_update",
+    r"comment_update",
+    r"file_delete",
+    r"dbupgrade",
+    r"truncate",
+    r"drop",
+    r"reset",
+]
+
 
 # 크롤링 동작 설정값
 class CrawlConfig:
@@ -67,6 +84,7 @@ class PageResult:
     status_code: int
     forms: list = field(default_factory=list)
     links: list = field(default_factory=list)
+    danger_links: list = field(default_factory=list)
     query_params: dict = field(default_factory=dict)
     page_title: str = ""
     is_error_page: bool = False
@@ -103,33 +121,40 @@ class Crawler:
     # --- 
     # URL 필터링 유틸리티 
     # ---
+
+    # 같은 도메인인지 확인
     def _is_in_scope(self, url: str) -> bool:
-        # 같은 도메인인지 확인
         parsed = urlparse(url)
         return parsed.scheme in ("http", "https") and parsed.netloc == self.parsed_base.netloc
 
+    # 제외 패턴에 해당하는 URL인지 확인
     def _is_excluded(self, url: str) -> bool:
-        # 제외 패턴에 해당하는 URL인지 확인
         return any(re.search(pattern, url, re.IGNORECASE) for pattern in EXCLUDE_PATTERNS)
 
+    # 상태 변경 가능성이 있는 URL은 방문하지 않고 danger_links로만 수집
+    def _is_danger_link(self, url: str) -> bool:
+        parsed = urlparse(url)
+        target = f"{parsed.path}?{parsed.query}"
+        return any(re.search(pattern, target, re.IGNORECASE) for pattern in DANGER_LINK_PATTERNS)
+
     def _normalize(self, url: str) -> str:
-        # 프래그먼트(#...) 제거해 URL 정규화
         return urlparse(url)._replace(fragment="").geturl()
 
 
     # --- 
     # 중복 입력 구조 감지용 시그니처 
     # ---
+
+    # 쿼리 파라미터 키 조합으로 GET 입력 구조 식별
     def _query_signature(self, url: str) -> Optional[tuple]:
-        # 쿼리 파라미터 키 조합으로 GET 입력 구조 식별
         parsed = urlparse(url)
         params = parse_qs(parsed.query, keep_blank_values=True)
         if not params:
             return None
         return ("QUERY", "GET", parsed.path or "/", tuple(sorted(params.keys())))
 
+    # 폼 액션 + 메서드 + 필드명 조합으로 폼 구조 식별
     def _form_signature(self, form: Form) -> tuple:
-        # 폼 액션 + 메서드 + 필드명 조합으로 폼 구조 식별
         parsed = urlparse(form.action)
         return (
             "FORM",
@@ -138,12 +163,12 @@ class Crawler:
             tuple(sorted(field.name for field in form.fields if field.name)),
         )
 
+    # MIN_PAGES 이상 크롤 후 새 입력 구조가 STAGNATION_LIMIT 연속으로 없으면 조기 종료
     def _should_stop_early(self, crawled: int) -> bool:
-        # MIN_PAGES 이상 크롤 후 새 입력 구조가 STAGNATION_LIMIT 연속으로 없으면 조기 종료
         return crawled >= CrawlConfig.MIN_PAGES and self.no_new_input_pages >= CrawlConfig.STAGNATION_LIMIT
 
+    # GET 요청, 실패 시 None 반환
     def _fetch(self, url: str) -> Optional[requests.Response]:
-        # GET 요청, 실패 시 None 반환
         try:
             return self.session.get(url, timeout=CrawlConfig.TIMEOUT, allow_redirects=True)
         except requests.RequestException as exc:
@@ -154,8 +179,9 @@ class Crawler:
     # ==========================================================================
     # 로그인
     # ==========================================================================
+    
+    # auth.py의 login() 호출 후 쿠키를 인스턴스에 저장
     def login(self, login_url: str = "") -> bool:
-        # auth.py의 login() 호출 후 쿠키를 인스턴스에 저장
         success, cookies = _do_login(self.session, url=login_url, base_url=self.base_url)
         if success:
             self.auth_cookies = cookies
@@ -176,8 +202,8 @@ class Crawler:
             fields.append(FormField(name=name, field_type=field_type, value=value, options=options))
         return Form(action=action, method=method, fields=fields, enctype=enctype)
 
+    # 로그인 → 시드 URL 큐 적재 → BFS 크롤링 수행
     def crawl(self, extra_seeds: list[str] | None = None, progress_callback=None) -> list[PageResult]:
-        # 로그인 → 시드 URL 큐 적재 → BFS 크롤링 수행
         if self.init_cookies is not None:
             self.session.cookies.update(self.init_cookies)
             self.auth_cookies = dict(self.init_cookies)
@@ -227,6 +253,13 @@ class Crawler:
                 for a in soup.find_all("a", href=True):
                     link = self._normalize(urljoin(url, a["href"]))
                     if self._is_in_scope(link) and not self._is_excluded(link):
+                        if self._is_danger_link(link):
+                            result.danger_links.append({
+                                "url": link,
+                                "method": "GET",
+                                "reason": "mutating_url",
+                            })
+                            continue
                         result.links.append(link)
                         if link not in self.visited:
                             self.queue.append(link)
@@ -255,15 +288,15 @@ class Crawler:
 
         return self.results
 
+    # 크롤링 결과를 JSON 파일로 저장
     def save(self, path: str = OUTPUT_FILE) -> None:
-        # 크롤링 결과를 JSON 파일로 저장
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump([asdict(result) for result in self.results], f, ensure_ascii=False, indent=2)
         print(f"[CRAWLER] saved: {path}")
 
+    # 크롤링 통계 출력 (페이지 수, 폼 수, 쿼리 파라미터 보유 페이지 수)
     def summary(self) -> None:
-        # 크롤링 통계 출력 (페이지 수, 폼 수, 쿼리 파라미터 보유 페이지 수)
         forms = sum(len(page.forms) for page in self.results)
         queries = sum(1 for page in self.results if page.query_params)
         print(f"[CRAWLER] pages={len(self.results)}, forms={forms}, query_pages={queries}")
