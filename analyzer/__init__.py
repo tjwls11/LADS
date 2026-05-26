@@ -16,11 +16,10 @@ from findings import (
 __all__ = [
     "run", "validate",
     "validate_sqli", "validate_xss", "validate_bac",
-    "detect_boolean_group", "detect_orderby_group", "detect_bac_group",
+    "detect_boolean_group", "detect_orderby_group", "detect_probe_group", "detect_bac_group",
 ]
 
 
-# ── 헬퍼 ─────────────────────────────────────────────────────────
 def _vuln_type(r: dict) -> str:
     return ((r.get("meta") or {}).get("vuln_type") or "").lower()
 
@@ -75,7 +74,6 @@ def _make_finding(r: dict, evidence: str) -> dict:
     return f
 
 
-# ── Phase 1: 단건 판정 라우팅 ────────────────────────────────────
 def _validate_single(r: dict) -> tuple[bool, str]:
     vt = _vuln_type(r)
     if "xss" in vt:
@@ -91,13 +89,11 @@ def _validate_single(r: dict) -> tuple[bool, str]:
     return validate_sqli(r)
 
 
-# ── 메인 진입점 ──────────────────────────────────────────────────
 def validate(results: list[dict], progress_callback=None) -> list[dict]:
     findings: list[dict] = []
     found_ids: set = set()
     total = len(results)
 
-    # Phase 1: 단건 검사
     for idx, r in enumerate(results):
         if progress_callback:
             progress_callback(idx + 1, total)
