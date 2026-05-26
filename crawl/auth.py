@@ -328,7 +328,13 @@ def login(
     timeout: int = _TIMEOUT,
 ) -> tuple[bool, dict]:
 
-    # 로그인 수행, (성공 여부, 쿠키) 반환 — 실패 시 (False, {})
+    # 빈 값이면 호출 시점의 환경 변수에서 읽음 (모듈 임포트 시점 값 X)
+    url            = url            or os.getenv("LOGIN_URL", "")
+    method         = method         or os.getenv("LOGIN_METHOD", "POST").upper()
+    login_id       = login_id       or os.getenv("LOGIN_ID", "")
+    login_password = login_password or os.getenv("LOGIN_PASSWORD", "")
+    fail_indicator = fail_indicator or os.getenv("LOGIN_FAIL_INDICATOR", "")
+
     if not url:
         return False, {}
 
@@ -410,12 +416,13 @@ def login_all_roles(
     base_url: str = "",
     timeout: int = _TIMEOUT,
 ) -> dict[str, dict]:
-    
+
     roles: dict[str, dict] = {"guest": {}}
     url = url or os.getenv("LOGIN_URL", "") or ensure_login_url(base_url, timeout=timeout)
     if not url:
         print("[AUTH] login URL not configured and auto-discovery failed", file=sys.stderr)
         return roles
+
 
     common = dict(
         url=url,
