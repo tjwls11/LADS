@@ -208,32 +208,10 @@ def detect_boolean_group(results: list[dict]) -> list[dict]:
             detected.append({"result": best, "evidence": evidence})
             continue
 
-        candidate_items = true_items or false_items
-        if candidate_items:
-            kind = "TRUE" if true_items else "FALSE"
-            sample_body = (candidate_items[0].get("response_body") or "").lower()
-            error_note = " + DB 에러 동반" if _has_db_error(sample_body) else ""
-            evidence = (
-                f"Boolean SQLi candidate ({kind} only): "
-                f"{len(candidate_items)}개 페이로드 시도, "
-                f"짝 페이로드 부재로 응답 비교 불가{error_note}"
-            )
-            best = candidate_items[0]
-            detected.append({"result": best, "evidence": evidence})
-
-    return detected
-
-
-
-def detect_probe_group(results: list[dict]) -> list[dict]:
-
-    probe_results = [
-        r for r in results
-        if not r.get("error")
-        and r.get("response_body")
-        and ("sqli" in _vuln_type(r) or "sql" in _vuln_type(r))
-        and _BOOL_PROBE.search(r.get("payload") or "")
-    ]
+        avg_true  = sum(r.get("length") or 0 for r in true_items)  / len(true_items)
+        avg_false = sum(r.get("length") or 0 for r in false_items) / len(false_items)
+        max_len   = max(avg_true, avg_false, 1)
+        diff      = abs(avg_true - avg_false) / max_len
 
     if not probe_results:
         return []
@@ -272,7 +250,7 @@ def detect_probe_group(results: list[dict]) -> list[dict]:
                 f"(ASCII/SUBSTRING/MID/REGEXP 등), 응답 차이 없음"
             )
 
-        best = max(group, key=_body_length)
+        best = max(true_items, key=lambda r: r.get("length") or 0)
         detected.append({"result": best, "evidence": evidence})
 
     return detected

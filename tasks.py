@@ -12,9 +12,46 @@ TASK_LABELS = {
 }
 
 
+# 역할별 크롤 결과를 URL 기준으로 병합하고 accessible_by(어떤 역할에서 접근 가능한지) 태깅
+def _merge_crawl_results(role_pages: dict[str, list[dict]]) -> list[dict]:
+    from urllib.parse import urlparse
+
+    def _form_sig(form: dict) -> str:
+        path = urlparse(form.get("action", "")).path or form.get("action", "")
+        method = form.get("method", "GET").upper()
+        names = sorted(f["name"] for f in form.get("fields", []) if f.get("name"))
+        return f"{method}:{path}:{','.join(names)}"
+
+    url_map: dict[str, dict] = {}
+
+    for role, pages in role_pages.items():
+        for page in pages:
+            url = page["url"]
+            status = page.get("status_code", 0)
+
+            if url not in url_map:
+                url_map[url] = {**page, "accessible_by": []}
+
+            # 해당 역할이 200으로 접근 가능한 경우 기록
+            if status == 200 and role not in url_map[url]["accessible_by"]:
+                url_map[url]["accessible_by"].append(role)
+
+            # 해당 역할에서만 보이는 새 폼 추가 (폼 시그니처 기준 중복 제거)
+            existing_sigs = {_form_sig(f) for f in url_map[url].get("forms", [])}
+            for form in page.get("forms", []):
+                sig = _form_sig(form)
+                if sig not in existing_sigs:
+                    url_map[url].setdefault("forms", []).append(form)
+                    existing_sigs.add(sig)
+
+    return list(url_map.values())
+
+
 def _task_crawl(run_path_fn, target_url, emit_progress=None):
+    from dataclasses import asdict
+    from crawl.auth import login_all_roles
     from crawl.crawler import Crawler
-    from crawl.target_builder import build_targets, print_summary
+    from crawl.target_builder import build_targets
 
     def _prog(n):
         if emit_progress: emit_progress(n)
@@ -22,31 +59,13 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     crawl_file   = run_path_fn("crawl_result.json")
     targets_file = run_path_fn("targets.json")
 
-    print(f"[CRAWL] start: {target_url}")
-    crawler = Crawler(target_url)
+    # 역할별 세션 쿠키 획득 및 저장
+    role_sessions = login_all_roles(base_url=target_url)
+    acquired = [r for r in role_sessions if role_sessions[r] or r == "guest"]
+    print(f"[CRAWL] roles to crawl: {acquired}")
 
-    def _crawl_progress(done, total):
-        _prog(int(done / max(total, 1) * 20))
-
-    crawler.crawl(progress_callback=_crawl_progress)
-    crawler.save(crawl_file)
-    crawler.summary()
-    _prog(20)
-
-    if crawler.auth_cookies:
-        cookies_file = run_path_fn("auth_cookies.json")
-        with open(cookies_file, "w", encoding="utf-8") as f:
-            json.dump(crawler.auth_cookies, f, ensure_ascii=False, indent=2)
-        print(f"[CRAWL] auth cookies saved: {len(crawler.auth_cookies)} cookies")
-    else:
-        print("[CRAWL] no auth cookies (anonymous crawl)")
-
-    # BAC용 역할별 세션 쿠키 저장
-    from crawl.auth import login_all_roles
-    role_sessions = login_all_roles()
     for role, cookies in role_sessions.items():
-        role_file = run_path_fn(f"auth_cookies_{role}.json")
-        with open(role_file, "w", encoding="utf-8") as f:
+        with open(run_path_fn(f"auth_cookies_{role}.json"), "w", encoding="utf-8") as f:
             json.dump(cookies, f, ensure_ascii=False, indent=2)
     acquired = [r for r, c in role_sessions.items() if c or r == "guest"]
     print(f"[CRAWL] role sessions saved: {acquired}")
@@ -57,7 +76,6 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     with open(targets_file, "w", encoding="utf-8") as f:
         json.dump(targets, f, ensure_ascii=False, indent=2)
     print(f"[CRAWL] targets saved: {targets_file} ({len(targets)})")
-    print_summary(targets)
 
 
 def _task_payload(payloads_file, emit_progress=None):
@@ -85,7 +103,7 @@ def _task_probe(run_path_fn, payloads_file, payloads_meta_file, emit_progress=No
         print(f"[ERROR] missing payload file: {payloads_file}")
         return
     if not os.path.exists(payloads_meta_file):
-        print(f"[WARN] missing payload meta file: {payloads_meta_file}")
+        print(f"[ERROR] missing payload meta file: {payloads_meta_file}")
         return
 
     with open(payloads_meta_file, encoding="utf-8") as f:
@@ -159,8 +177,8 @@ def _task_validate(run_path_fn, emit_progress=None):
         _prog(90 + int(done / max(total, 1) * 10))
 
     findings = validate_run(input_file=exec_file, output_file=findings_file, progress_callback=_validate_progress)
-    xss_cnt  = sum(1 for f in findings if "xss" in (f.get("vuln_type") or "").lower())
-    sqli_cnt = sum(1 for f in findings if "sql" in (f.get("vuln_type") or "").lower())
+    xss_cnt  = sum(1 for f in findings if f.get("module") == "xss")
+    sqli_cnt = sum(1 for f in findings if f.get("module") == "sqli")
     print(f"[VALIDATE] done: findings={len(findings)}, xss={xss_cnt}, sqli={sqli_cnt}")
     _prog(100)
 
