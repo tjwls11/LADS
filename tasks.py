@@ -67,46 +67,12 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     for role, cookies in role_sessions.items():
         with open(run_path_fn(f"auth_cookies_{role}.json"), "w", encoding="utf-8") as f:
             json.dump(cookies, f, ensure_ascii=False, indent=2)
+    acquired = [r for r, c in role_sessions.items() if c or r == "guest"]
+    print(f"[CRAWL] role sessions saved: {acquired}")
 
-    # 역할별 크롤 실행
-    role_pages: dict[str, list[dict]] = {}
-    n_roles = max(len(role_sessions), 1)
-    prog_per_role = 18 // n_roles
-
-    for i, (role, cookies) in enumerate(role_sessions.items()):
-        print(f"[CRAWL] [{role}] start: {target_url}")
-        crawler = Crawler(target_url, init_cookies=cookies)
-
-        base = i * prog_per_role
-        def _crawl_progress(done, total, _base=base):
-            _prog(_base + int(done / max(total, 1) * prog_per_role))
-
-        crawler.crawl(progress_callback=_crawl_progress)
-        crawler.summary()
-        role_pages[role] = [asdict(r) for r in crawler.results]
-        print(f"[CRAWL] [{role}] pages={len(crawler.results)}")
-
-    _prog(18)
-
-    # 병합 및 accessible_by 태깅
-    merged_pages = _merge_crawl_results(role_pages)
-    print(f"[CRAWL] merged: {len(merged_pages)} unique pages")
-
-    os.makedirs(os.path.dirname(crawl_file) or ".", exist_ok=True)
-    with open(crawl_file, "w", encoding="utf-8") as f:
-        json.dump(merged_pages, f, ensure_ascii=False, indent=2)
-    print(f"[CRAWL] saved: {crawl_file}")
-
-    # 이후 단계(BAC 등)가 auth_cookies.json 하나만 참조하므로 가장 높은 권한 세션으로 유지 (나중에 수정해야함)
-    main_cookies = role_sessions.get("member") or role_sessions.get("admin") or {}
-    if main_cookies:
-        with open(run_path_fn("auth_cookies.json"), "w", encoding="utf-8") as f:
-            json.dump(main_cookies, f, ensure_ascii=False, indent=2)
-        print(f"[CRAWL] auth cookies saved: {len(main_cookies)} cookies")
-
-    _prog(20)
-
-    targets = build_targets(merged_pages)
+    with open(crawl_file, encoding="utf-8") as f:
+        pages = json.load(f)
+    targets = build_targets(pages)
     with open(targets_file, "w", encoding="utf-8") as f:
         json.dump(targets, f, ensure_ascii=False, indent=2)
     print(f"[CRAWL] targets saved: {targets_file} ({len(targets)})")
