@@ -73,9 +73,9 @@
     </div>
 
     <div class="p-5">
-      <a class="flex h-12 w-full items-center justify-center gap-2 rounded-sm bg-slate-800 text-[15px] font-bold text-white hover:bg-slate-900" href="/">
+      <a class="flex h-12 w-full items-center justify-center gap-2 rounded-sm bg-slate-800 text-[15px] font-bold text-white hover:bg-slate-900" href="/" onclick="if(location.pathname=='/'){event.preventDefault();_startStream('/stream/all');}">
         <span class="material-symbols-outlined text-[20px]">play_arrow</span>
-        스캔 시작
+        전체 스캔 시작
       </a>
     </div>
   </nav>

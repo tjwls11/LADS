@@ -16,6 +16,21 @@
 
   <form method="POST" action="/settings" class="flex flex-col gap-5">
 
+    <!-- 로그인 URL -->
+    <div class="rounded border border-surface-line bg-white p-6">
+      <h2 class="mb-1 text-[16px] font-black text-slate-950">로그인 URL</h2>
+      <p class="mb-5 text-[13px] text-slate-500">로그인 폼이 있는 페이지 URL입니다. 비워두면 로그인 없이 스캔합니다.</p>
+      <div class="flex flex-col gap-1.5">
+        <label class="text-[13px] font-bold text-slate-700" for="login_url">URL</label>
+        <input
+          id="login_url" name="login_url" type="text"
+          value="{{ login_url }}"
+          placeholder="예) http://34.68.27.120:8081/bbs/login.php"
+          class="rounded border border-surface-line px-3 py-2 font-mono text-[14px] text-slate-950 focus:border-slate-950 focus:outline-none"
+        >
+      </div>
+    </div>
+
     <!-- 일반 계정 -->
     <div class="rounded border border-surface-line bg-white p-6">
       <h2 class="mb-1 text-[16px] font-black text-slate-950">일반 계정 (member)</h2>

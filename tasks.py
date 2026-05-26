@@ -51,6 +51,15 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     acquired = [r for r, c in role_sessions.items() if c or r == "guest"]
     print(f"[CRAWL] role sessions saved: {acquired}")
 
+    # probe 태스크용 base 쿠키: member > crawler 세션 순으로 우선 사용
+    base_cookies_file = run_path_fn("auth_cookies.json")
+    if not os.path.exists(base_cookies_file):
+        member_cookies = role_sessions.get("member") or role_sessions.get("user") or {}
+        if member_cookies:
+            with open(base_cookies_file, "w", encoding="utf-8") as f:
+                json.dump(member_cookies, f, ensure_ascii=False, indent=2)
+            print(f"[CRAWL] member session → auth_cookies.json ({len(member_cookies)} cookies)")
+
     with open(crawl_file, encoding="utf-8") as f:
         pages = json.load(f)
     targets = build_targets(pages)

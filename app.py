@@ -293,13 +293,26 @@ def _get_exec_summary():
         return None
 
 
+def _misconfig_done() -> bool:
+    p = _run_path("findings.json")
+    if not os.path.exists(p):
+        return False
+    try:
+        with open(p, encoding="utf-8") as f:
+            findings = json.load(f)
+        return any(fi.get("module") == "misconfig" for fi in findings)
+    except Exception:
+        return False
+
+
 def _get_pipeline_steps():
     checks = [
-        ("crawl", "크롤러", "travel_explore", os.path.exists(_run_path("crawl_result.json")) and os.path.exists(_run_path("targets.json"))),
-        ("payload", "페이로드", "psychology", os.path.exists(PAYLOADS_FILE)),
-        ("probe", "주입 테스트 준비", "radar", os.path.exists(_run_path("probe_tasks.json"))),
-        ("execute", "실행기", "terminal", os.path.exists(_run_path("execution_results.json"))),
-        ("validate", "분석기", "analytics", os.path.exists(_run_path("findings.json"))),
+        ("crawl",     "크롤러",        "travel_explore", os.path.exists(_run_path("crawl_result.json")) and os.path.exists(_run_path("targets.json"))),
+        ("payload",   "페이로드",       "psychology",     os.path.exists(PAYLOADS_FILE)),
+        ("probe",     "주입 테스트 준비", "radar",          os.path.exists(_run_path("probe_tasks.json"))),
+        ("execute",   "실행기",         "terminal",       os.path.exists(_run_path("execution_results.json"))),
+        ("validate",  "분석기",         "analytics",      os.path.exists(_run_path("findings.json"))),
+        ("misconfig", "설정 오류 점검",  "policy",         _misconfig_done()),
     ]
     active_assigned = False
     steps = []
@@ -482,6 +495,7 @@ def settings_page():
     saved = False
     if request.method == "POST":
         updates = {
+            "LOGIN_URL":            request.form.get("login_url", ""),
             "LOGIN_ID":             request.form.get("login_id", ""),
             "LOGIN_PASSWORD":       request.form.get("login_password", ""),
             "ADMIN_ID":             request.form.get("admin_id", ""),
@@ -494,6 +508,7 @@ def settings_page():
     return render_template(
         "settings.html",
         saved=saved,
+        login_url=os.getenv("LOGIN_URL", ""),
         login_id=os.getenv("LOGIN_ID", ""),
         login_password=os.getenv("LOGIN_PASSWORD", ""),
         admin_id=os.getenv("ADMIN_ID", ""),
