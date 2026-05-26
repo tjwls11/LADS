@@ -12,6 +12,7 @@ import requests
 from bs4 import BeautifulSoup  # type: ignore[reportMissingModuleSource]
 from dotenv import load_dotenv
 
+from crawl.auth import LOGIN_URL, ensure_login_url, login as _do_login
 
 load_dotenv()
 
@@ -149,7 +150,17 @@ class Crawler:
             print(f"[ERROR] fetch failed: {url} ({exc})", file=sys.stderr)
             return None
 
-    # <form> 태그에서 action, method, 필드 목록 추출
+
+    # ==========================================================================
+    # 로그인
+    # ==========================================================================
+    def login(self, login_url: str = "") -> bool:
+        # auth.py의 login() 호출 후 쿠키를 인스턴스에 저장
+        success, cookies = _do_login(self.session, url=login_url, base_url=self.base_url)
+        if success:
+            self.auth_cookies = cookies
+        return success
+
     def _parse_form(self, form_tag, page_url: str) -> Form:
         action = urljoin(page_url, form_tag.get("action") or page_url)
         method = (form_tag.get("method") or "GET").upper()
@@ -166,9 +177,15 @@ class Crawler:
         return Form(action=action, method=method, fields=fields, enctype=enctype)
 
     def crawl(self, extra_seeds: list[str] | None = None, progress_callback=None) -> list[PageResult]:
+        # 로그인 → 시드 URL 큐 적재 → BFS 크롤링 수행
         if self.init_cookies is not None:
             self.session.cookies.update(self.init_cookies)
             self.auth_cookies = dict(self.init_cookies)
+        else:
+            login_url = os.getenv("LOGIN_URL", LOGIN_URL) or ensure_login_url(self.base_url)
+            if login_url:
+                if not self.login(login_url):
+                    print("[WARN] login failed; continuing anonymously", file=sys.stderr)
 
         self.queue.append(self._normalize(self.base_url + "/"))
         for seed in (extra_seeds or []):

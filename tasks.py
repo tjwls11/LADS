@@ -60,7 +60,7 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     targets_file = run_path_fn("targets.json")
 
     # 역할별 세션 쿠키 획득 및 저장
-    role_sessions = login_all_roles()
+    role_sessions = login_all_roles(base_url=target_url)
     acquired = [r for r in role_sessions if role_sessions[r] or r == "guest"]
     print(f"[CRAWL] roles to crawl: {acquired}")
 
