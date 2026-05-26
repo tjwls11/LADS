@@ -208,50 +208,18 @@ def detect_boolean_group(results: list[dict]) -> list[dict]:
             detected.append({"result": best, "evidence": evidence})
             continue
 
-        avg_true  = sum(r.get("length") or 0 for r in true_items)  / len(true_items)
-        avg_false = sum(r.get("length") or 0 for r in false_items) / len(false_items)
-        max_len   = max(avg_true, avg_false, 1)
-        diff      = abs(avg_true - avg_false) / max_len
-
-    if not probe_results:
-        return []
-
-    groups: dict[tuple, list[dict]] = defaultdict(list)
-    for r in probe_results:
-        key = (r.get("url"), r.get("inject_param"))
-        groups[key].append(r)
-
-    detected: list[dict] = []
-
-    for _key, group in groups.items():
-        lengths = [_body_length(r) for r in group]
-        if not lengths:
-            continue
-
-        min_len, max_len_v = min(lengths), max(lengths)
-        diff = (max_len_v - min_len) / max(max_len_v, 1)
-
-        sample_body = (group[0].get("response_body") or "").lower()
-        has_error = _has_db_error(sample_body)
-
-        if diff >= BOOL_GROUP_THRESHOLD and len(group) >= 2:
+        candidate_items = true_items or false_items
+        if candidate_items:
+            kind = "TRUE" if true_items else "FALSE"
+            sample_body = (candidate_items[0].get("response_body") or "").lower()
+            error_note = " + DB 에러 동반" if _has_db_error(sample_body) else ""
             evidence = (
-                f"Boolean Probe SQLi (confirmed): {len(group)}개 정찰 페이로드 응답 분산 "
-                f"(min={min_len}b, max={max_len_v}b, diff={diff:.1%})"
+                f"Boolean SQLi candidate ({kind} only): "
+                f"{len(candidate_items)}개 페이로드 시도, "
+                f"짝 페이로드 부재로 응답 비교 불가{error_note}"
             )
-        elif has_error:
-            evidence = (
-                f"Boolean Probe SQLi (suspected): {len(group)}개 정찰 페이로드 시도, "
-                f"응답 동일하지만 DB 에러 시그니처 동반"
-            )
-        else:
-            evidence = (
-                f"Boolean Probe SQLi candidate: {len(group)}개 정찰 페이로드 시도 "
-                f"(ASCII/SUBSTRING/MID/REGEXP 등), 응답 차이 없음"
-            )
-
-        best = max(true_items, key=lambda r: r.get("length") or 0)
-        detected.append({"result": best, "evidence": evidence})
+            best = candidate_items[0]
+            detected.append({"result": best, "evidence": evidence})
 
     return detected
 
