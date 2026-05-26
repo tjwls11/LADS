@@ -133,7 +133,8 @@ def _task_crawl():
 
 
 def _task_payload():
-    _payload_impl(PAYLOADS_FILE, _emit_progress)
+    targets_file = _run_path("targets.json")
+    _payload_impl(PAYLOADS_FILE, targets_file=targets_file, emit_progress=_emit_progress)
 
 
 def _task_probe():

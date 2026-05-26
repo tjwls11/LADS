@@ -1,7 +1,9 @@
-﻿import json
+import json
+import re
 import argparse
 import sys
 import os
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -20,135 +22,121 @@ except ImportError:
 from payload.filter import filter_payloads, deduplicate, report as filter_report
 
 
-
-INPUT_POINTS = [
-
-    # XSS 타겟
-    {
-        "name":    "xss_wr_subject",
-        "url":     "http://34.68.27.120:8081/bbs/write_update.php",
-        "method":  "POST",
-        "param":   "wr_subject",
-        "type":    "stored_xss",
-        "note":    "게시글 제목 - 홈/상세/관리자 3곳 반영, script 차단",
-        "vuln_types": ["xss_subject"],
-        "base_params": {"w": "w", "bo_table": "free", "wr_content": "", "html": "1"},
-    },
-    {
-        "name":    "xss_wr_content",
-        "url":     "http://34.68.27.120:8081/bbs/write_update.php",
-        "method":  "POST",
-        "param":   "wr_content",
-        "type":    "stored_xss",
-        "note":    "게시글 본문 - img/a/b/p 허용, script 차단, 이벤트핸들러 우회 필요",
-        "vuln_types": ["xss_content"],
-        "base_params": {"w": "w", "bo_table": "free", "wr_subject": "test", "html": "1"},
-    },
-    {
-        "name":    "xss_search_stx",
-        "url":     "http://34.68.27.120:8081/bbs/search.php",
-        "method":  "GET",
-        "param":   "stx",
-        "type":    "reflected_xss",
-        "note":    "검색창 stx - value='' 속성 반영, onfocus=alert(1)→onfocusalert1 필터",
-        "vuln_types": ["xss_search"],
-        "base_params": {"sfl": "wr_subject", "sop": "and"},
-    },
-    {
-        "name":    "xss_qalist_stx",
-        "url":     "http://34.68.27.120:8081/bbs/board.php",
-        "method":  "GET",
-        "param":   "stx",
-        "type":    "reflected_xss",
-        "note":    "Q&A 게시판 검색창 - board.php?bo_table=qa, search.php와 동일 stx 패턴",
-        "vuln_types": ["xss_search"],
-        "base_params": {"sfl": "wr_subject", "sop": "and"},
-    },
-    {
-        "name":    "xss_comment",
-        "url":     "http://34.68.27.120:8081/bbs/write_comment_update.php",
-        "method":  "POST",
-        "param":   "wr_content",
-        "type":    "stored_xss",
-        "note":    "댓글 본문 - http:// URL만 <a href> 변환, javascript: 차단",
-        "vuln_types": ["xss_comment"],
-        "base_params": {"bo_table": "free", "wr_id": "1", "w": ""},
-    },
-
-    # SQLi 타겟
-    {
-        "name":    "sqli_search_sfl",
-        "url":     "http://34.68.27.120:8081/bbs/search.php",
-        "method":  "GET",
-        "param":   "sfl",
-        "type":    "string",
-        "db":      "MySQL",
-        "note":    "검색 필드 선택자 - SQL WHERE {sfl} LIKE '...' 직접 연결",
-        "vuln_types": ["sqli_field"],
-        "base_params": {"stx": "test", "sop": "and"},
-    },
-    {
-        "name":    "sqli_search_sst",
-        "url":     "http://34.68.27.120:8081/bbs/search.php",
-        "method":  "GET",
-        "param":   "sst",
-        "type":    "string",
-        "db":      "MySQL",
-        "note":    "정렬 컬럼 - ORDER BY {sst} 직접 연결, intval 없음",
-        "vuln_types": ["sqli_orderby"],
-        "base_params": {"stx": "test", "sfl": "wr_subject", "sop": "and"},
-    },
-    {
-        "name":    "sqli_search_stx",
-        "url":     "http://34.68.27.120:8081/bbs/search.php",
-        "method":  "GET",
-        "param":   "stx",
-        "type":    "string",
-        "db":      "MySQL",
-        "note":    "검색 키워드 - INSTR(LOWER(col),LOWER(stx)) 컨텍스트, PHP 공백분리 → 페이로드 공백금지, a'))))...# 패턴",
-        "vuln_types": ["sqli_string"],
-        "base_params": {"sfl": "wr_subject", "sop": "and"},
-    },
-    {
-        "name":    "sqli_login_mb_id",
-        "url":     "http://34.68.27.120:8081/bbs/login_check.php",
-        "method":  "POST",
-        "param":   "mb_id",
-        "type":    "string",
-        "db":      "MySQL",
-        "note":    "로그인 아이디 - 문자열 컨텍스트, 인증 우회 목표",
-        "vuln_types": ["sqli_login"],
-        "base_params": {"mb_password": "test", "url": "/"},
-    },
-    {
-        "name":    "sqli_qalist_sfl",
-        "url":     "http://34.68.27.120:8081/bbs/board.php",
-        "method":  "GET",
-        "param":   "sfl",
-        "type":    "string",
-        "db":      "MySQL",
-        "note":    "Q&A 게시판 검색 필드 선택자 - board.php?bo_table=qa, search.php sfl과 동일 패턴",
-        "vuln_types": ["sqli_field"],
-        "base_params": {"stx": "test", "sop": "and"},
-    },
-]
-
 COUNT = 7  # 타입당 페이로드 수
 
-def run(out_file: str = "results/payloads_llm.json", progress_callback=None):  # 로딩바 콜백 함수
-    
+
+def _slug(url: str) -> str:
+    path = urlparse(url).path.rstrip("/")
+    name = path.split("/")[-1] if path else "root"
+    return re.sub(r"[^a-zA-Z0-9]", "_", name)[:20] or "ep"
+
+
+# targets.json의 injectable 파라미터에서 INPUT_POINTS 형식의 포인트 목록 생성
+def build_points_from_targets(targets: list[dict]) -> list[dict]:
+    points: list[dict] = []
+    seen: set[str] = set()
+
+    for target in targets:
+        url = target.get("action") or target.get("source_url", "")
+        method = (target.get("method") or "GET").upper()
+        url_lower = url.lower()
+        is_login = any(k in url_lower for k in ("login", "signin", "auth"))
+        slug = _slug(url)
+
+        all_params = target.get("params", [])
+        injectable = [p for p in all_params if p.get("injectable")]
+
+        for param in injectable:
+            pname = param["name"]
+            pname_lower = pname.lower()
+            key = f"{method}:{url}:{pname}"
+            if key in seen:
+                continue
+            seen.add(key)
+
+            base_params = {
+                p["name"]: str(p.get("default_value") or "")
+                for p in all_params
+                if p["name"] != pname and p.get("default_value")
+            }
+
+            common = dict(
+                url=url,
+                method=method,
+                param=pname,
+                base_params=base_params,
+                db="MySQL",
+                note=f"동적 발견 - {method} {url}",
+            )
+
+            # SQLi 포인트
+            if is_login:
+                sqli_type = "sqli_login"
+            elif any(k in pname_lower for k in ("sst", "order", "sort")):
+                sqli_type = "sqli_orderby"
+            elif any(k in pname_lower for k in ("sfl", "field", "col")):
+                sqli_type = "sqli_field"
+            else:
+                sqli_type = "sqli_string"
+
+            points.append({
+                "name": f"sqli_{slug}_{pname}",
+                "type": "string",
+                "vuln_types": [sqli_type],
+                **common,
+            })
+
+            # XSS 포인트 (패스워드 필드 제외, 로그인 폼 제외)
+            if is_login or any(k in pname_lower for k in ("password", "passwd", "pw")):
+                continue
+
+            if method == "GET":
+                xss_type = "xss_search"
+            elif any(k in pname_lower for k in ("subject", "title")):
+                xss_type = "xss_subject"
+            elif "comment" in url_lower or "reply" in url_lower:
+                xss_type = "xss_comment"
+            else:
+                xss_type = "xss_content"
+
+            points.append({
+                "name": f"xss_{slug}_{pname}",
+                "type": "stored_xss" if method == "POST" else "reflected_xss",
+                "vuln_types": [xss_type],
+                **common,
+            })
+
+    return points
+
+
+def run(out_file: str = "results/payloads_llm.json", progress_callback=None, targets_file: str | None = None):
+
     print(f"\n{'='*60}")
-    print(f"  Gnuboard5 Payload Generator v2")
-    print(f"  Target: http://34.68.27.120:8081/")
+    print(f"  Payload Generator")
     print(f"{'='*60}\n")
+
+    if not targets_file or not os.path.exists(targets_file):
+        print(f"[ERROR] targets_file 없음: {targets_file}")
+        print("[ERROR] 크롤링을 먼저 실행하세요.")
+        return
+
+    with open(targets_file, encoding="utf-8") as f:
+        targets_data = json.load(f)
+
+    points = build_points_from_targets(targets_data)
+    if not points:
+        print("[ERROR] injectable 파라미터 없음 — targets.json을 확인하세요.")
+        return
+
+    print(f"  입력점: {len(points)}개 (targets.json 기반)\n")
 
     client = LLMClient()
     all_results = {}
-    total_points = len(INPUT_POINTS)
+    total_points = len(points)
 
-    for idx, point in enumerate(INPUT_POINTS):
+    for idx, point in enumerate(points):
         pname = point["name"]
-        if progress_callback:  # 로딩바 콜백 함수
+        if progress_callback:
             progress_callback(idx, total_points)
         print(f"\n[INPUT POINT] {pname}")
         print(f"  {point['method']} {point['url']} | param={point['param']}")
@@ -166,9 +154,9 @@ def run(out_file: str = "results/payloads_llm.json", progress_callback=None):  #
                     system=SYSTEM_PROMPT,
                     temperature=0.7,
                 )
-                parsed          = parse_clean(raw)           # 파싱 + 중복 제거
-                filtered, rejected = filter_payloads(parsed) # 품질 필터링
-                records         = deduplicate(filtered)       # 최종 중복 제거
+                parsed          = parse_clean(raw)
+                filtered, rejected = filter_payloads(parsed)
+                records         = deduplicate(filtered)
                 all_results[pname][vtype] = records
                 print(f"{len(records)} payloads (제거: {len(rejected)}개)")
                 for r in records:
@@ -184,11 +172,11 @@ def run(out_file: str = "results/payloads_llm.json", progress_callback=None):  #
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
 
-    # Step 7에서 사용할 입력 지점 메타 저장
+    # probe 단계에서 사용할 입력 지점 메타 저장
     meta_out = os.getenv("PAYLOADS_META_FILE", "results/payloads_llm_meta.json")
     os.makedirs(os.path.dirname(meta_out) or ".", exist_ok=True)
     with open(meta_out, "w", encoding="utf-8") as f:
-        json.dump(INPUT_POINTS, f, ensure_ascii=False, indent=2)
+        json.dump(points, f, ensure_ascii=False, indent=2)
 
     all_records = [
         r
@@ -207,8 +195,9 @@ def run(out_file: str = "results/payloads_llm.json", progress_callback=None):  #
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default="results/payloads_llm.json")
+    parser.add_argument("--targets", default=None)
     args = parser.parse_args()
-    run(args.out)
+    run(args.out, targets_file=args.targets)
     try:
         from pause_on_exit import pause_if_enabled
         pause_if_enabled()
