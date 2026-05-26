@@ -8,6 +8,7 @@ function toggleMenu(force) {
 var _es = null;
 var _currentTask = null;
 var _currentStageTask = null;
+var _hadError = false;
 
 var _labels = {
   crawl:     '크롤링',
@@ -135,6 +136,7 @@ function _startStream(url) {
   var taskName = url.split('/stream/')[1].split('?')[0];
   _currentTask = taskName;
   _currentStageTask = null;
+  _hadError = false;
 
   logTitle.textContent = (_labels[taskName] || taskName) + ' 로그';
   logBadge.textContent = 'Running';
@@ -149,17 +151,24 @@ function _startStream(url) {
     if (event.data === '__DONE__') {
       _es.close();
       _es = null;
-      logBadge.textContent = 'Done';
-      logBadge.className = _badgeClass('ok');
-      _updateProgressBar(100);
+      if (_hadError) {
+        logBadge.textContent = 'Error';
+        logBadge.className = _badgeClass('error');
+      } else {
+        logBadge.textContent = 'Done';
+        logBadge.className = _badgeClass('ok');
+        _updateProgressBar(100);
+      }
       _setButtons(false);
-      setTimeout(function () {
-        if (_currentTask === 'all') {
-          window.location.href = '/findings';
-        } else {
-          location.reload();
-        }
-      }, 1500);
+      if (!_hadError) {
+        setTimeout(function () {
+          if (_currentTask === 'all') {
+            window.location.href = '/findings';
+          } else {
+            location.reload();
+          }
+        }, 1500);
+      }
       return;
     }
 
@@ -186,14 +195,17 @@ function _startStream(url) {
     stageBadge.className = 'w-[82px] shrink-0 rounded px-2 text-center text-[11px] font-black ' + stage.cls;
     stageBadge.textContent = stage.label;
 
+    var isError = event.data.indexOf('[ERROR]') !== -1;
+    if (isError) _hadError = true;
+
     var level = document.createElement('span');
     level.className = 'w-[52px] shrink-0 text-secondary';
-    level.textContent = event.data.indexOf('[ERROR]') !== -1 ? '[ERROR]'
-                      : event.data.indexOf('[WARN]')  !== -1 ? '[WARN]'
+    level.textContent = isError                             ? '[ERROR]'
+                      : event.data.indexOf('[WARN]') !== -1 ? '[WARN]'
                       : '[INFO]';
 
     var message = document.createElement('span');
-    message.className = event.data.indexOf('[ERROR]') !== -1 ? 'text-error' : 'text-slate-950';
+    message.className = isError ? 'text-error' : 'text-slate-950';
     message.textContent = event.data;
 
     row.appendChild(time);
