@@ -206,12 +206,17 @@ def detect_boolean_group(results: list[dict]) -> list[dict]:
                 )
             best = true_items[0]
             detected.append({"result": best, "evidence": evidence})
-            continue
 
-        avg_true  = sum(r.get("length") or 0 for r in true_items)  / len(true_items)
-        avg_false = sum(r.get("length") or 0 for r in false_items) / len(false_items)
-        max_len   = max(avg_true, avg_false, 1)
-        diff      = abs(avg_true - avg_false) / max_len
+    return detected
+
+
+def detect_probe_group(results: list[dict]) -> list[dict]:
+    probe_results = [
+        r for r in results
+        if not r.get("error")
+        and r.get("response_body")
+        and _BOOL_PROBE.search(r.get("payload") or "")
+    ]
 
     if not probe_results:
         return []
@@ -250,7 +255,7 @@ def detect_boolean_group(results: list[dict]) -> list[dict]:
                 f"(ASCII/SUBSTRING/MID/REGEXP 등), 응답 차이 없음"
             )
 
-        best = max(true_items, key=lambda r: r.get("length") or 0)
+        best = max(group, key=_body_length)
         detected.append({"result": best, "evidence": evidence})
 
     return detected
