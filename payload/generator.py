@@ -1,15 +1,10 @@
 import json
-import re
 import argparse
 import sys
 import os
-import hashlib
-from urllib.parse import urlparse
-from collections import defaultdict
 from dotenv import load_dotenv
 load_dotenv()
 
-# 직접 실행(python generate_payloads.py) 시 LADS 루트를 경로에 추가
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
@@ -18,13 +13,15 @@ try:
     from .parser import parse as parse_llm
     from .baseline import sqli as baseline_sqli
     from .baseline import xss as baseline_xss
+    from .point_builder import build_points_from_targets
 except ImportError:
     from llm_client import LLMClient
     from prompt_builder import SYSTEM_PROMPT, build_mutation_prompt
     from parser import parse as parse_llm
     from baseline import sqli as baseline_sqli
     from baseline import xss as baseline_xss
-    
+    from point_builder import build_points_from_targets
+
 from payload.filter import filter_payloads, deduplicate
 
 
@@ -32,52 +29,6 @@ COUNT = 7
 BASELINE_LIMIT = 8
 
 
-def _slug(url: str) -> str:
-    path = urlparse(url).path.rstrip("/")
-    name = path.split("/")[-1] if path else "root"
-    return re.sub(r"[^a-zA-Z0-9]", "_", name)[:20] or "ep"
-
-
-# 문자열 기반 짧은 해시 생성
-def _short_hash(value: str) -> str:
-    return hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]
-
-
-# point 이름에 넣을 안전한 식별자로 변환
-def _safe_id(value: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_]+", "_", value).strip("_")[:80] or "group"
-
-
-# 동일 group_key의 값과 URL 예시 수집
-def _group_examples(targets: list[dict]) -> dict[str, dict]:
-    grouped: dict[str, dict] = defaultdict(lambda: {
-        "value_examples": [],
-        "url_examples": [],
-        "option_examples": [],
-    })
-
-    for target in targets:
-        url = target.get("action") or target.get("source_url", "")
-        for param in target.get("params", []) or []:
-            group_key = param.get("group_key")
-            if not group_key:
-                continue
-            item = grouped[group_key]
-
-            value = str(param.get("default_value") or "")
-            if value not in item["value_examples"] and len(item["value_examples"]) < 5:
-                item["value_examples"].append(value)
-
-            if url and url not in item["url_examples"] and len(item["url_examples"]) < 5:
-                item["url_examples"].append(url)
-
-            options = param.get("options") or []
-            if options and len(item["option_examples"]) < 3:
-                item["option_examples"].append(options[:10])
-
-    return grouped
-
-# 취약점 분류와 입력 형태에 맞는 baseline payload 선택
 def _select_baseline_payloads(point: dict, vuln_type: str) -> list[dict]:
     vt = (vuln_type or "").lower()
     value_shape = (point.get("value_shape") or "").lower()
@@ -118,97 +69,61 @@ def _select_baseline_payloads(point: dict, vuln_type: str) -> list[dict]:
     return payloads[:BASELINE_LIMIT]
 
 
-# targets.json의 injectable 파라미터에서 INPUT_POINTS 형식의 포인트 목록 생성
-def build_points_from_targets(targets: list[dict]) -> list[dict]:
-    points: list[dict] = []
-    seen: set[str] = set()
-    grouped_examples = _group_examples(targets)
+def generate_payloads(
+    points: list[dict],
+    client: LLMClient,
+    progress_callback=None,
+) -> dict:
+    all_results: dict = {}
+    total_points = len(points)
+    # (group_key, vuln_type) → 동일 파라미터 그룹의 LLM 결과 재사용
+    payload_cache: dict[tuple[str, str], list[dict]] = {}
 
-    for target in targets:
-        url = target.get("action") or target.get("source_url", "")
-        method = (target.get("method") or "GET").upper()
-        url_lower = url.lower()
-        is_login = any(k in url_lower for k in ("login", "signin", "auth"))
-        slug = _slug(url)
-        target_key = _safe_id(str(target.get("id") or _short_hash(f"{method}:{url}")))
+    for idx, point in enumerate(points):
+        pname = point["name"]
+        if progress_callback:
+            progress_callback(idx, total_points)
+        print(f"\n[INPUT POINT] {pname}")
+        print(f"  {point['method']} {point['url']} | param={point['param']}")
+        print(f"  Note: {point['note']}")
+        print("-" * 60)
 
-        all_params = target.get("params", [])
-        injectable = [p for p in all_params if p.get("injectable")]
+        all_results[pname] = {}
 
-        for param in injectable:
-            pname = param["name"]
-            pname_lower = pname.lower()
-            group_key = param.get("group_key") or f"{pname}:unknown:{method}:{param.get('field_type', 'unknown')}:{param.get('value_shape', 'unknown')}"
-            key = f"{method}:{url}:{pname}:{group_key}"
-            if key in seen:
-                continue
-            seen.add(key)
-
-            base_params = {
-                p["name"]: str(p.get("default_value") or "")
-                for p in all_params
-                if p["name"] != pname and p.get("default_value")
-            }
-
-            common = dict(
-                url=url,
-                method=method,
-                param=pname,
-                base_params=base_params,
-                base_value=str(param.get("default_value") or ""),
-                group_key=group_key,
-                location=param.get("location") or target.get("type") or "unknown",
-                field_type=param.get("field_type") or "unknown",
-                value_shape=param.get("value_shape") or "unknown",
-                enctype=target.get("enctype", ""),
-                options=param.get("options") or [],
-                value_examples=grouped_examples.get(group_key, {}).get("value_examples", []),
-                url_examples=grouped_examples.get(group_key, {}).get("url_examples", []),
-                option_examples=grouped_examples.get(group_key, {}).get("option_examples", []),
-                db="MySQL",
-                note=f"동적 발견 - {method} {url}",
-            )
-
-            # SQLi 포인트
-            if is_login:
-                sqli_type = "sqli_login"
-            elif any(k in pname_lower for k in ("sst", "order", "sort")):
-                sqli_type = "sqli_orderby"
-            elif any(k in pname_lower for k in ("sfl", "field", "col")):
-                sqli_type = "sqli_field"
-            else:
-                sqli_type = "sqli_string"
-
-            points.append({
-                "name": f"sqli_{slug}_{target_key}_{_safe_id(group_key)}",
-                "type": "string",
-                "vuln_types": [sqli_type],
-                **common,
-            })
-
-            # XSS 포인트 (패스워드 필드 제외, 로그인 폼 제외)
-            if is_login or any(k in pname_lower for k in ("password", "passwd", "pw")):
+        for vtype in point["vuln_types"]:
+            cache_key = (point.get("group_key") or pname, vtype)
+            if cache_key in payload_cache:
+                records = payload_cache[cache_key]
+                all_results[pname][vtype] = records
+                print(f"  [{vtype}] reused group payloads ({len(records)} payloads)")
                 continue
 
-            if any(k in pname_lower for k in ("subject", "title")):
-                xss_type = "xss_subject"
-            elif any(k in pname_lower for k in ("comment", "reply", "content")):
-                xss_type = "xss_comment"
-            elif "comment" in url_lower or "reply" in url_lower:
-                xss_type = "xss_comment"
-            elif method == "GET":
-                xss_type = "xss_search"
-            else:
-                xss_type = "xss_content"
+            print(f"  [{vtype}] generating group payloads...", end=" ", flush=True)
+            try:
+                baseline_payloads = _select_baseline_payloads(point, vtype)
+                if not baseline_payloads:
+                    payload_cache[cache_key] = []
+                    all_results[pname][vtype] = []
+                    print("skipped: no baseline")
+                    continue
 
-            points.append({
-                "name": f"xss_{slug}_{target_key}_{_safe_id(group_key)}",
-                "type": "stored_xss" if method == "POST" else "reflected_xss",
-                "vuln_types": [xss_type],
-                **common,
-            })
+                prompt = build_mutation_prompt(point, vtype, baseline_payloads, count=COUNT)
+                raw = client.generate(prompt=prompt, system=SYSTEM_PROMPT, temperature=0.7)
+                parsed = parse_llm(raw)
+                filtered, rejected = filter_payloads(parsed)
+                records = deduplicate(filtered)
+                payload_cache[cache_key] = records
+                all_results[pname][vtype] = records
+                print(f"{len(records)} payloads (제거: {len(rejected)}개)")
+                for r in records:
+                    print(f"    [{r['type']:20s}] {r['payload'][:70]}")
+            except Exception as e:
+                print(f"FAILED: {e}")
+                all_results[pname][vtype] = []
 
-    return points
+        print()
+
+    return all_results
 
 
 def run(out_file: str = "results/payloads_llm.json", progress_callback=None, targets_file: str | None = None):
@@ -232,77 +147,18 @@ def run(out_file: str = "results/payloads_llm.json", progress_callback=None, tar
 
     print(f"  입력점: {len(points)}개 (targets.json 기반)\n")
 
-    client = LLMClient()
-    all_results = {}
-    total_points = len(points)
-    group_cache: dict[tuple[str, str], list[dict]] = {}
+    all_results = generate_payloads(points, LLMClient(), progress_callback)
 
-    for idx, point in enumerate(points):
-        pname = point["name"]
-        if progress_callback:
-            progress_callback(idx, total_points)
-        print(f"\n[INPUT POINT] {pname}")
-        print(f"  {point['method']} {point['url']} | param={point['param']}")
-        print(f"  Note: {point['note']}")
-        print("-" * 60)
-
-        all_results[pname] = {}
-
-        for vtype in point["vuln_types"]:
-            cache_key = (point.get("group_key") or pname, vtype)
-            if cache_key in group_cache:
-                records = group_cache[cache_key]
-                all_results[pname][vtype] = records
-                print(f"  [{vtype}] reused group payloads ({len(records)} payloads)")
-                continue
-
-            print(f"  [{vtype}] generating group payloads...", end=" ", flush=True)
-            try:
-                baseline_payloads = _select_baseline_payloads(point, vtype)
-                if not baseline_payloads:
-                    group_cache[cache_key] = []
-                    all_results[pname][vtype] = []
-                    print("skipped: no baseline")
-                    continue
-
-                prompt  = build_mutation_prompt(point, vtype, baseline_payloads, count=COUNT)
-                raw     = client.generate(
-                    prompt=prompt,
-                    system=SYSTEM_PROMPT,
-                    temperature=0.7,
-                )
-                parsed          = parse_llm(raw)
-                filtered, rejected = filter_payloads(parsed)
-                records         = deduplicate(filtered)
-                group_cache[cache_key] = records
-                all_results[pname][vtype] = records
-                print(f"{len(records)} payloads (제거: {len(rejected)}개)")
-                for r in records:
-                    print(f"    [{r['type']:20s}] {r['payload'][:70]}")
-            except Exception as e:
-                print(f"FAILED: {e}")
-                all_results[pname][vtype] = []
-
-        print()
-
-    # 저장
     os.makedirs(os.path.dirname(out_file) or ".", exist_ok=True)
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
 
-    # probe 단계에서 사용할 입력 지점 메타 저장
     meta_out = (out_file[:-5] if out_file.endswith(".json") else out_file) + "_meta.json"
     os.makedirs(os.path.dirname(meta_out) or ".", exist_ok=True)
     with open(meta_out, "w", encoding="utf-8") as f:
         json.dump(points, f, ensure_ascii=False, indent=2)
 
-    all_records = [
-        r
-        for point_data in all_results.values()
-        for records in point_data.values()
-        for r in records
-    ]
-    total = len(all_records)
+    total = sum(len(r) for pd in all_results.values() for r in pd.values())
 
     print(f"{'='*60}")
     print(f"  저장 완료 -> {out_file}")
