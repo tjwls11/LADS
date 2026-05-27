@@ -198,8 +198,3 @@ if __name__ == "__main__":
     parser.add_argument("--targets", default=None)
     args = parser.parse_args()
     run(args.out, targets_file=args.targets)
-    try:
-        from pause_on_exit import pause_if_enabled
-        pause_if_enabled()
-    except Exception:
-        pass
