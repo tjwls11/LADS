@@ -31,9 +31,6 @@
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-2">
               <h2 class="text-[17px] font-black text-slate-950">{{ target.name }}</h2>
-              <span class="rounded bg-slate-100 px-2 py-0.5 font-mono text-[11px] font-bold uppercase text-slate-500">
-                {{ target.cms }}
-              </span>
             </div>
             <p class="mt-0.5 truncate font-mono text-[13px] text-slate-500">{{ target.url }}</p>
           </div>
@@ -115,12 +112,6 @@
               <input name="admin_password" type="password" value="{{ target.admin_password }}" placeholder="admin 비밀번호"
                 class="rounded border border-surface-line bg-white px-3 py-2 font-mono text-[13px] text-slate-950 focus:border-slate-950 focus:outline-none">
             </div>
-            <div class="flex flex-col gap-1.5 md:col-span-2">
-              <label class="text-[13px] font-bold text-slate-700">로그인 실패 문자열 <span class="font-normal text-slate-400">(선택 — 자동감지보다 우선)</span></label>
-              <input name="login_fail_indicator" type="text" value="{{ target.login_fail_indicator }}"
-                placeholder="예) 가입된 회원 아이디가 아니거나 비밀번호가 틀립니다."
-                class="rounded border border-surface-line bg-white px-3 py-2 font-mono text-[13px] text-slate-950 focus:border-slate-950 focus:outline-none">
-            </div>
           </div>
           <div class="mt-4 flex justify-end">
             <button type="submit" class="inline-flex h-9 items-center gap-1.5 rounded bg-slate-950 px-4 text-[13px] font-bold text-white hover:bg-slate-700">
@@ -155,14 +146,6 @@
             <label class="text-[13px] font-bold text-slate-700">URL <span class="text-red-500">*</span></label>
             <input name="url" type="text" required placeholder="http://example.com"
               class="rounded border border-surface-line px-3 py-2 font-mono text-[13px] text-slate-950 focus:border-slate-950 focus:outline-none">
-          </div>
-          <div class="flex flex-col gap-1.5 md:col-span-2">
-            <label class="text-[13px] font-bold text-slate-700">CMS 종류</label>
-            <select name="cms" class="rounded border border-surface-line px-3 py-2 text-[13px] text-slate-950 focus:border-slate-950 focus:outline-none">
-              <option value="gnuboard">Gnuboard</option>
-              <option value="wordpress">WordPress</option>
-              <option value="custom">기타 (Custom)</option>
-            </select>
           </div>
         </div>
         <div class="mt-4 flex justify-end">

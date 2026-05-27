@@ -518,7 +518,6 @@ def add_target():
     import time
     name = request.form.get("name", "").strip()
     url = request.form.get("url", "").strip().rstrip("/")
-    cms = request.form.get("cms", "custom")
     if not name or not url:
         return redirect("/targets")
     key = f"target_{int(time.time())}"
@@ -526,7 +525,7 @@ def add_target():
         "key": key,
         "name": name,
         "url": url,
-        "cms": cms,
+        "cms": "custom",
         "login_url": "",
         "login_id": "",
         "login_password": "",
