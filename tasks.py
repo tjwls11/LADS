@@ -97,7 +97,7 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
         json.dump(merged_pages, f, ensure_ascii=False, indent=2)
     print(f"[CRAWL] saved: {crawl_file}")
 
-    # 이후 단계가 auth_cookies.json 하나만 참조하므로 가장 높은 권한 세션으로 유지
+    # 이후 단계(BAC 등)가 auth_cookies.json 하나만 참조하므로 가장 높은 권한 세션으로 유지
     main_cookies = role_sessions.get("member") or role_sessions.get("admin") or {}
     if main_cookies:
         with open(run_path_fn("auth_cookies.json"), "w", encoding="utf-8") as f:
@@ -137,7 +137,7 @@ def _task_probe(run_path_fn, payloads_file, payloads_meta_file, emit_progress=No
         print(f"[ERROR] missing payload file: {payloads_file}")
         return
     if not os.path.exists(payloads_meta_file):
-        print(f"[ERROR] missing payload meta file: {payloads_meta_file}")
+        print(f"[WARN] missing payload meta file: {payloads_meta_file}")
         return
 
     with open(payloads_meta_file, encoding="utf-8") as f:
@@ -211,8 +211,8 @@ def _task_validate(run_path_fn, emit_progress=None):
         _prog(90 + int(done / max(total, 1) * 10))
 
     findings = validate_run(input_file=exec_file, output_file=findings_file, progress_callback=_validate_progress)
-    xss_cnt  = sum(1 for f in findings if f.get("module") == "xss")
-    sqli_cnt = sum(1 for f in findings if f.get("module") == "sqli")
+    xss_cnt  = sum(1 for f in findings if "xss" in (f.get("vuln_type") or "").lower())
+    sqli_cnt = sum(1 for f in findings if "sql" in (f.get("vuln_type") or "").lower())
     print(f"[VALIDATE] done: findings={len(findings)}, xss={xss_cnt}, sqli={sqli_cnt}")
     _prog(100)
 

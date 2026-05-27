@@ -207,6 +207,20 @@ def detect_boolean_group(results: list[dict]) -> list[dict]:
             best = true_items[0]
             detected.append({"result": best, "evidence": evidence})
 
+        else:
+            candidate_items = true_items or false_items
+            if candidate_items:
+                kind = "TRUE" if true_items else "FALSE"
+                sample_body = (candidate_items[0].get("response_body") or "").lower()
+                error_note = " + DB 에러 동반" if _has_db_error(sample_body) else ""
+                evidence = (
+                    f"Boolean SQLi candidate ({kind} only): "
+                    f"{len(candidate_items)}개 페이로드 시도, "
+                    f"짝 페이로드 부재로 응답 비교 불가{error_note}"
+                )
+                best = candidate_items[0]
+                detected.append({"result": best, "evidence": evidence})
+
     return detected
 
 
