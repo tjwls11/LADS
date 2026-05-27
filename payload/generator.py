@@ -4,6 +4,7 @@ import argparse
 import sys
 import os
 from urllib.parse import urlparse
+from collections import defaultdict
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -12,17 +13,22 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from .llm_client import LLMClient
-    from .context_builder import SYSTEM_PROMPT, build_prompt
+    from .prompt_builder import SYSTEM_PROMPT, build_mutation_prompt
     from .parser import clean as parse_clean
+    from .baseline import sqli as baseline_sqli
+    from .baseline import xss as baseline_xss
 except ImportError:
     from llm_client import LLMClient
-    from context_builder import SYSTEM_PROMPT, build_prompt
+    from payload.prompt_builder import SYSTEM_PROMPT, build_mutation_prompt
     from parser import clean as parse_clean
+    from baseline import sqli as baseline_sqli
+    from baseline import xss as baseline_xss
 
 from payload.filter import filter_payloads, deduplicate, report as filter_report
 
 
 COUNT = 7  # 타입당 페이로드 수
+BASELINE_LIMIT = int(os.getenv("BASELINE_LIMIT", "8"))
 
 
 def _slug(url: str) -> str:
@@ -31,10 +37,74 @@ def _slug(url: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "_", name)[:20] or "ep"
 
 
+# point 이름용 안전한 식별자 변환
+def _safe_id(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_]+", "_", value).strip("_")[:80] or "group"
+
+
+# 동일 group_key의 값과 URL 예시 수집
+def _group_examples(targets: list[dict]) -> dict[str, dict]:
+    grouped: dict[str, dict] = defaultdict(lambda: {
+        "value_examples": [],
+        "url_examples": [],
+        "option_examples": [],
+    })
+
+    for target in targets:
+        url = target.get("action") or target.get("source_url", "")
+        for param in target.get("params", []) or []:
+            group_key = param.get("group_key")
+            if not group_key:
+                continue
+            item = grouped[group_key]
+
+            value = str(param.get("default_value") or "")
+            if value not in item["value_examples"] and len(item["value_examples"]) < 5:
+                item["value_examples"].append(value)
+
+            if url and url not in item["url_examples"] and len(item["url_examples"]) < 5:
+                item["url_examples"].append(url)
+
+            options = param.get("options") or []
+            if options and len(item["option_examples"]) < 3:
+                item["option_examples"].append(options[:10])
+
+    return grouped
+
+
+# 취약점 분류와 입력 형태에 맞는 baseline payload 선택
+def _select_baseline_payloads(point: dict, vuln_type: str) -> list[dict]:
+    vt = (vuln_type or "").lower()
+    value_shape = (point.get("value_shape") or "").lower()
+
+    if vt == "sqli_login":
+        payloads = baseline_sqli.get_by_sql_context("auth", "HIGH")
+    elif vt == "sqli_field":
+        payloads = baseline_sqli.get_by_sql_context("field_selector", "HIGH")
+    elif vt == "sqli_orderby":
+        payloads = baseline_sqli.get_by_sql_context("orderby", "HIGH")
+    elif vt.startswith("sqli_"):
+        if value_shape == "number_like":
+            payloads = baseline_sqli.get_by_context("numeric", "HIGH")
+        else:
+            payloads = baseline_sqli.get_by_sql_context("like_string", "HIGH")
+    elif vt == "xss_search":
+        payloads = baseline_xss.get_by_context("attr_value", "HIGH")
+    elif vt in {"xss_subject", "xss_content", "xss_comment"}:
+        payloads = baseline_xss.get_by_context("stored", "HIGH")
+    elif vt.startswith("xss_"):
+        payloads = baseline_xss.get_by_context("unknown", "HIGH")
+    else:
+        payloads = []
+
+    return payloads[:BASELINE_LIMIT]
+
+
 # targets.json의 injectable 파라미터에서 INPUT_POINTS 형식의 포인트 목록 생성
 def build_points_from_targets(targets: list[dict]) -> list[dict]:
     points: list[dict] = []
     seen: set[str] = set()
+    grouped_examples = _group_examples(targets)
 
     for target in targets:
         url = target.get("action") or target.get("source_url", "")
@@ -49,7 +119,8 @@ def build_points_from_targets(targets: list[dict]) -> list[dict]:
         for param in injectable:
             pname = param["name"]
             pname_lower = pname.lower()
-            key = f"{method}:{url}:{pname}"
+            group_key = param.get("group_key") or f"{pname}:unknown:{method}:{param.get('field_type', 'unknown')}:{param.get('value_shape', 'unknown')}"
+            key = f"{method}:{url}:{pname}:{group_key}"
             if key in seen:
                 continue
             seen.add(key)
@@ -65,6 +136,16 @@ def build_points_from_targets(targets: list[dict]) -> list[dict]:
                 method=method,
                 param=pname,
                 base_params=base_params,
+                base_value=str(param.get("default_value") or ""),
+                group_key=group_key,
+                location=param.get("location") or target.get("type") or "unknown",
+                field_type=param.get("field_type") or "unknown",
+                value_shape=param.get("value_shape") or "unknown",
+                enctype=target.get("enctype", ""),
+                options=param.get("options") or [],
+                value_examples=grouped_examples.get(group_key, {}).get("value_examples", []),
+                url_examples=grouped_examples.get(group_key, {}).get("url_examples", []),
+                option_examples=grouped_examples.get(group_key, {}).get("option_examples", []),
                 db="MySQL",
                 note=f"동적 발견 - {method} {url}",
             )
@@ -80,7 +161,7 @@ def build_points_from_targets(targets: list[dict]) -> list[dict]:
                 sqli_type = "sqli_string"
 
             points.append({
-                "name": f"sqli_{slug}_{pname}",
+                "name": f"sqli_{slug}_{_safe_id(group_key)}",
                 "type": "string",
                 "vuln_types": [sqli_type],
                 **common,
@@ -100,7 +181,7 @@ def build_points_from_targets(targets: list[dict]) -> list[dict]:
                 xss_type = "xss_content"
 
             points.append({
-                "name": f"xss_{slug}_{pname}",
+                "name": f"xss_{slug}_{_safe_id(group_key)}",
                 "type": "stored_xss" if method == "POST" else "reflected_xss",
                 "vuln_types": [xss_type],
                 **common,
@@ -133,6 +214,7 @@ def run(out_file: str = "results/payloads_llm.json", progress_callback=None, tar
     client = LLMClient()
     all_results = {}
     total_points = len(points)
+    group_cache: dict[tuple[str, str], list[dict]] = {}
 
     for idx, point in enumerate(points):
         pname = point["name"]
@@ -146,9 +228,17 @@ def run(out_file: str = "results/payloads_llm.json", progress_callback=None, tar
         all_results[pname] = {}
 
         for vtype in point["vuln_types"]:
-            print(f"  [{vtype}] generating...", end=" ", flush=True)
+            cache_key = (point.get("group_key") or pname, vtype)
+            if cache_key in group_cache:
+                records = group_cache[cache_key]
+                all_results[pname][vtype] = records
+                print(f"  [{vtype}] reused group payloads ({len(records)} payloads)")
+                continue
+
+            print(f"  [{vtype}] generating group payloads...", end=" ", flush=True)
             try:
-                prompt  = build_prompt(point, vtype, count=COUNT)
+                baseline_payloads = _select_baseline_payloads(point, vtype)
+                prompt  = build_mutation_prompt(point, vtype, baseline_payloads, count=COUNT)
                 raw     = client.generate(
                     prompt=prompt,
                     system=SYSTEM_PROMPT,
@@ -157,6 +247,7 @@ def run(out_file: str = "results/payloads_llm.json", progress_callback=None, tar
                 parsed          = parse_clean(raw)
                 filtered, rejected = filter_payloads(parsed)
                 records         = deduplicate(filtered)
+                group_cache[cache_key] = records
                 all_results[pname][vtype] = records
                 print(f"{len(records)} payloads (제거: {len(rejected)}개)")
                 for r in records:
