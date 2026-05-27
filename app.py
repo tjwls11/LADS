@@ -459,6 +459,7 @@ def findings_page():
             "_warning":     not is_confirmed,
             "_evidence":    mf.get("evidence", ""),
             "_vuln_type":   mf.get("type", "misconfig"),
+            "_extra":       mf.get("extra") or {},
             "url":          mf.get("url", ""),
             "method":       "GET",
             "inject_param": None,

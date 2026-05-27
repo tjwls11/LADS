@@ -134,8 +134,11 @@ block content %}
         </thead>
         <tbody>
           {% if all_results %} {% for r in all_results %}
+          {% set cves = r._extra.cves if r._extra and r._extra.cves else [] %}
+          {% set row_id = 'row-' + loop.index|string %}
           <tr
-            class="hover:bg-slate-50 result-row {% if r._vulnerable %}row-danger{% elif r._warning %}row-warning{% elif r.error %}row-error{% else %}row-safe{% endif %}"
+            class="hover:bg-slate-50 result-row {% if r._vulnerable %}row-danger{% elif r._warning %}row-warning{% elif r.error %}row-error{% else %}row-safe{% endif %} {% if cves %}cursor-pointer{% endif %}"
+            {% if cves %}onclick="toggleCve('{{ row_id }}')"{% endif %}
           >
             <td class="border-b border-slate-100 px-3 py-3 whitespace-nowrap">
               {% if r._vulnerable %}
@@ -196,12 +199,57 @@ block content %}
               {{ r.status or '-' }}
             </td>
             <td
-              class="max-w-[380px] truncate border-b border-slate-100 px-3 py-3 text-slate-600"
-              title="{{ r._evidence }}"
+              class="border-b border-slate-100 px-3 py-3 text-slate-600"
             >
-              {{ r._evidence or '' }}
+              <div class="max-w-[340px] truncate" title="{{ r._evidence }}">{{ r._evidence or '' }}</div>
+              {% if cves %}
+              <span class="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-blue-500">
+                <span class="material-symbols-outlined text-[13px]">expand_more</span>
+                CVE {{ cves|length }}건
+              </span>
+              {% endif %}
             </td>
           </tr>
+          {% if cves %}
+          <tr id="{{ row_id }}" class="cve-detail hidden result-row {% if r._vulnerable %}row-danger{% elif r._warning %}row-warning{% else %}row-safe{% endif %}">
+            <td colspan="7" class="border-b border-slate-100 bg-slate-50 px-6 py-4">
+              <div class="text-[12px] font-bold text-slate-500 mb-2">
+                CVE 목록 — {{ r._extra.header }}: {{ r._extra.value }}
+              </div>
+              <table class="w-full border-separate border-spacing-0 text-[12px]">
+                <thead>
+                  <tr class="text-[11px] font-bold text-slate-400">
+                    <th class="pb-1 pr-4 text-left whitespace-nowrap">CVE ID</th>
+                    <th class="pb-1 pr-4 text-left whitespace-nowrap">Severity</th>
+                    <th class="pb-1 pr-4 text-left whitespace-nowrap">Score</th>
+                    <th class="pb-1 text-left">설명</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for cve in cves %}
+                  <tr>
+                    <td class="py-1 pr-4 font-mono font-bold whitespace-nowrap">
+                      <a href="https://nvd.nist.gov/vuln/detail/{{ cve.id }}" target="_blank"
+                         class="text-blue-600 hover:underline">{{ cve.id }}</a>
+                    </td>
+                    <td class="py-1 pr-4 whitespace-nowrap">
+                      <span class="rounded px-2 py-0.5 font-bold
+                        {% if cve.severity == 'CRITICAL' %}bg-red-100 text-red-700
+                        {% elif cve.severity == 'HIGH' %}bg-orange-100 text-orange-700
+                        {% elif cve.severity == 'MEDIUM' %}bg-yellow-100 text-yellow-700
+                        {% else %}bg-slate-100 text-slate-600{% endif %}">
+                        {{ cve.severity }}
+                      </span>
+                    </td>
+                    <td class="py-1 pr-4 font-mono whitespace-nowrap">{{ cve.score or '-' }}</td>
+                    <td class="py-1 text-slate-600 max-w-[500px]">{{ cve.description or '-' }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </td>
+          </tr>
+          {% endif %}
           {% endfor %} {% else %} {% for f in findings %}
           <tr class="hover:bg-slate-50">
             <td class="border-b border-slate-100 px-3 py-3 whitespace-nowrap">
@@ -292,6 +340,14 @@ block content %}
       active.className =
         'filter-btn rounded-sm border border-slate-800 bg-slate-800 px-4 py-2 text-[13px] font-extrabold text-white'
     }
+  }
+
+  function toggleCve(rowId) {
+    var el = document.getElementById(rowId)
+    if (!el) return
+    el.classList.toggle('hidden')
+    var icon = el.previousElementSibling && el.previousElementSibling.querySelector('.material-symbols-outlined')
+    if (icon) icon.textContent = el.classList.contains('hidden') ? 'expand_more' : 'expand_less'
   }
 
   document.addEventListener('click', function (e) {
