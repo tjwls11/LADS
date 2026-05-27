@@ -59,7 +59,7 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     crawl_file   = run_path_fn("crawl_result.json")
     targets_file = run_path_fn("targets.json")
 
-    # 역할별 세션 쿠키 획득 및 저장
+    # 역할별 세션 쿠키 획득
     role_sessions = login_all_roles(base_url=target_url)
     acquired = [r for r in role_sessions if role_sessions[r] or r == "guest"]
     print(f"[CRAWL] roles to crawl: {acquired}")
@@ -74,6 +74,8 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     prog_per_role = 18 // n_roles
 
     for i, (role, cookies) in enumerate(role_sessions.items()):
+        if role == "member2":
+            continue
         print(f"[CRAWL] [{role}] start: {target_url}")
         crawler = Crawler(target_url, init_cookies=cookies)
 
@@ -97,7 +99,7 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
         json.dump(merged_pages, f, ensure_ascii=False, indent=2)
     print(f"[CRAWL] saved: {crawl_file}")
 
-    # 이후 단계(BAC 등)가 auth_cookies.json 하나만 참조하므로 가장 높은 권한 세션으로 유지 (나중에 수정해야함)
+    # 이후 단계(BAC 등)가 auth_cookies.json 하나만 참조하므로 가장 높은 권한 세션으로 유지
     main_cookies = role_sessions.get("member") or role_sessions.get("admin") or {}
     if main_cookies:
         with open(run_path_fn("auth_cookies.json"), "w", encoding="utf-8") as f:
