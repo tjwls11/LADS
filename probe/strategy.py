@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 from urllib.parse import urlparse
+import re
 
 XSS_CONTEXT_HINT: Dict[str, str] = {
     "attr_value":    '→ " onmouseover=alert(1) x=" 계열 우선',
@@ -14,6 +15,17 @@ XSS_CONTEXT_HINT: Dict[str, str] = {
     "none":          '→ 반사 없음 (필터링됨)',
     "unknown":       '→ 컨텍스트 불명확',
 }
+
+_DESTRUCTIVE_SQL_RE = re.compile(
+    r"\b(drop|delete|update|insert|alter|truncate|create|replace|rename|grant|revoke)\b",
+    re.IGNORECASE,
+)
+
+# 상태를 변경하거나 삭제할 수 있는 쿼리는 제외
+def _is_destructive_payload(payload: str) -> bool:
+    if not payload:
+        return False
+    return bool(_DESTRUCTIVE_SQL_RE.search(payload))
 
 
 def _base_url(url: str) -> str:
@@ -140,6 +152,9 @@ def build_tasks(
         def _emit(payload: str, vtype: str, rec_type: str | None, family: str | None) -> None:
             nonlocal tid
             if not payload or payload in used_payloads:
+                return
+            if _is_destructive_payload(payload):
+                print(f"[PROBE] skipped destructive payload: point={name}, family={family or rec_type or '-'}")
                 return
             used_payloads.add(payload)
             meta = {"vuln_type": vtype, "type": rec_type, "family": family}
