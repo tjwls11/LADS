@@ -74,6 +74,8 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     prog_per_role = 18 // n_roles
 
     for i, (role, cookies) in enumerate(role_sessions.items()):
+        if role == "member2":
+            continue
         print(f"[CRAWL] [{role}] start: {target_url}")
         crawler = Crawler(target_url, init_cookies=cookies)
 
