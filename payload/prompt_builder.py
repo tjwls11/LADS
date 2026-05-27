@@ -1,10 +1,8 @@
 from __future__ import annotations
-
 import json
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-
 
 PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
 
@@ -90,22 +88,22 @@ def build_mutation_prompt(
     baseline_text = _format_baseline_payloads(baseline_payloads)
 
     return f"""Mutation direction:
-{type_prompt}
+            {type_prompt}
 
-Vulnerability type:
-{vuln_type}
+            Vulnerability type:
+            {vuln_type}
 
-Structural context:
-{context_json}
+            Structural context:
+            {context_json}
 
-Baseline payloads:
-{baseline_text}
+            Baseline payloads:
+            {baseline_text}
 
-Task:
-Generate {count} context-adapted mutations from the baseline payloads.
-Keep the same attack intent as the baseline payloads.
-Do not introduce unrelated payload families.
-Prefer variants that can survive the shown location, method, field_type, value_shape, and enctype.
+            Task:
+            Generate {count} context-adapted mutations from the baseline payloads.
+            Keep the same attack intent as the baseline payloads.
+            Do not introduce unrelated payload families.
+            Prefer variants that can survive the shown location, method, field_type, value_shape, and enctype.
 
-Output format:
-TYPE | PATTERN_FAMILY | PAYLOAD"""
+            Output format:
+            TYPE | PATTERN_FAMILY | PAYLOAD"""

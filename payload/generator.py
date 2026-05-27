@@ -3,6 +3,7 @@ import re
 import argparse
 import sys
 import os
+import hashlib
 from urllib.parse import urlparse
 from collections import defaultdict
 from dotenv import load_dotenv
@@ -14,21 +15,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from .llm_client import LLMClient
     from .prompt_builder import SYSTEM_PROMPT, build_mutation_prompt
-    from .parser import clean as parse_clean
+    from .parser import parse as parse_llm
     from .baseline import sqli as baseline_sqli
     from .baseline import xss as baseline_xss
 except ImportError:
     from llm_client import LLMClient
-    from payload.prompt_builder import SYSTEM_PROMPT, build_mutation_prompt
-    from parser import clean as parse_clean
+    from prompt_builder import SYSTEM_PROMPT, build_mutation_prompt
+    from parser import parse as parse_llm
     from baseline import sqli as baseline_sqli
     from baseline import xss as baseline_xss
+    
+from payload.filter import filter_payloads, deduplicate
 
-from payload.filter import filter_payloads, deduplicate, report as filter_report
 
-
-COUNT = 7  # 타입당 페이로드 수
-BASELINE_LIMIT = int(os.getenv("BASELINE_LIMIT", "8"))
+COUNT = 7
+BASELINE_LIMIT = 8
 
 
 def _slug(url: str) -> str:
@@ -37,7 +38,12 @@ def _slug(url: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "_", name)[:20] or "ep"
 
 
-# point 이름용 안전한 식별자 변환
+# 문자열 기반 짧은 해시 생성
+def _short_hash(value: str) -> str:
+    return hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]
+
+
+# point 이름에 넣을 안전한 식별자로 변환
 def _safe_id(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_]+", "_", value).strip("_")[:80] or "group"
 
@@ -71,11 +77,12 @@ def _group_examples(targets: list[dict]) -> dict[str, dict]:
 
     return grouped
 
-
 # 취약점 분류와 입력 형태에 맞는 baseline payload 선택
 def _select_baseline_payloads(point: dict, vuln_type: str) -> list[dict]:
     vt = (vuln_type or "").lower()
     value_shape = (point.get("value_shape") or "").lower()
+    field_type  = (point.get("field_type")  or "").lower()
+    location    = (point.get("location")    or "").lower()
 
     if vt == "sqli_login":
         payloads = baseline_sqli.get_by_sql_context("auth", "HIGH")
@@ -87,13 +94,24 @@ def _select_baseline_payloads(point: dict, vuln_type: str) -> list[dict]:
         if value_shape == "number_like":
             payloads = baseline_sqli.get_by_context("numeric", "HIGH")
         else:
-            payloads = baseline_sqli.get_by_sql_context("like_string", "HIGH")
+            payloads = baseline_sqli.get_by_context("string", "HIGH")
     elif vt == "xss_search":
-        payloads = baseline_xss.get_by_context("attr_value", "HIGH")
+        if field_type == "textarea":
+            payloads = baseline_xss.get_by_context("body", "HIGH")
+        else:
+            payloads = baseline_xss.get_by_context("attr_value", "HIGH")
     elif vt in {"xss_subject", "xss_content", "xss_comment"}:
-        payloads = baseline_xss.get_by_context("stored", "HIGH")
+        if field_type == "textarea":
+            payloads = baseline_xss.get_by_context("body", "HIGH")
+        else:
+            payloads = baseline_xss.get_by_context("stored", "HIGH")
     elif vt.startswith("xss_"):
-        payloads = baseline_xss.get_by_context("unknown", "HIGH")
+        if location in ("header", "cookie"):
+            payloads = baseline_xss.get_by_context("filter_bypass", "HIGH")
+        elif field_type == "textarea":
+            payloads = baseline_xss.get_by_context("body", "HIGH")
+        else:
+            payloads = baseline_xss.get_by_context("reflected", "HIGH")
     else:
         payloads = []
 
@@ -112,6 +130,7 @@ def build_points_from_targets(targets: list[dict]) -> list[dict]:
         url_lower = url.lower()
         is_login = any(k in url_lower for k in ("login", "signin", "auth"))
         slug = _slug(url)
+        target_key = _safe_id(str(target.get("id") or _short_hash(f"{method}:{url}")))
 
         all_params = target.get("params", [])
         injectable = [p for p in all_params if p.get("injectable")]
@@ -161,7 +180,7 @@ def build_points_from_targets(targets: list[dict]) -> list[dict]:
                 sqli_type = "sqli_string"
 
             points.append({
-                "name": f"sqli_{slug}_{_safe_id(group_key)}",
+                "name": f"sqli_{slug}_{target_key}_{_safe_id(group_key)}",
                 "type": "string",
                 "vuln_types": [sqli_type],
                 **common,
@@ -171,17 +190,19 @@ def build_points_from_targets(targets: list[dict]) -> list[dict]:
             if is_login or any(k in pname_lower for k in ("password", "passwd", "pw")):
                 continue
 
-            if method == "GET":
-                xss_type = "xss_search"
-            elif any(k in pname_lower for k in ("subject", "title")):
+            if any(k in pname_lower for k in ("subject", "title")):
                 xss_type = "xss_subject"
+            elif any(k in pname_lower for k in ("comment", "reply", "content")):
+                xss_type = "xss_comment"
             elif "comment" in url_lower or "reply" in url_lower:
                 xss_type = "xss_comment"
+            elif method == "GET":
+                xss_type = "xss_search"
             else:
                 xss_type = "xss_content"
 
             points.append({
-                "name": f"xss_{slug}_{_safe_id(group_key)}",
+                "name": f"xss_{slug}_{target_key}_{_safe_id(group_key)}",
                 "type": "stored_xss" if method == "POST" else "reflected_xss",
                 "vuln_types": [xss_type],
                 **common,
@@ -238,13 +259,19 @@ def run(out_file: str = "results/payloads_llm.json", progress_callback=None, tar
             print(f"  [{vtype}] generating group payloads...", end=" ", flush=True)
             try:
                 baseline_payloads = _select_baseline_payloads(point, vtype)
+                if not baseline_payloads:
+                    group_cache[cache_key] = []
+                    all_results[pname][vtype] = []
+                    print("skipped: no baseline")
+                    continue
+
                 prompt  = build_mutation_prompt(point, vtype, baseline_payloads, count=COUNT)
                 raw     = client.generate(
                     prompt=prompt,
                     system=SYSTEM_PROMPT,
                     temperature=0.7,
                 )
-                parsed          = parse_clean(raw)
+                parsed          = parse_llm(raw)
                 filtered, rejected = filter_payloads(parsed)
                 records         = deduplicate(filtered)
                 group_cache[cache_key] = records
@@ -264,7 +291,7 @@ def run(out_file: str = "results/payloads_llm.json", progress_callback=None, tar
         json.dump(all_results, f, ensure_ascii=False, indent=2)
 
     # probe 단계에서 사용할 입력 지점 메타 저장
-    meta_out = os.getenv("PAYLOADS_META_FILE", "results/payloads_llm_meta.json")
+    meta_out = (out_file[:-5] if out_file.endswith(".json") else out_file) + "_meta.json"
     os.makedirs(os.path.dirname(meta_out) or ".", exist_ok=True)
     with open(meta_out, "w", encoding="utf-8") as f:
         json.dump(points, f, ensure_ascii=False, indent=2)

@@ -122,7 +122,11 @@ def _task_payload(payloads_file, targets_file=None, emit_progress=None):
 
     os.makedirs("results", exist_ok=True)
     print(f"[PAYLOAD] generate: {payloads_file}")
-    generate_run(out_file=payloads_file, targets_file=targets_file)
+
+    def _payload_cb(idx, total):
+        _prog(20 + int(idx / max(total, 1) * 10))
+
+    generate_run(out_file=payloads_file, targets_file=targets_file, progress_callback=_payload_cb)
     _prog(30)
 
 
