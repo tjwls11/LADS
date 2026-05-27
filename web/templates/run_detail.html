@@ -58,18 +58,26 @@
     <div class="rounded border border-surface-line bg-white p-6">
       <h2 class="mb-4 text-[16px] font-black text-slate-950">취약점 요약</h2>
       {% if has_findings %}
-      <div class="grid grid-cols-3 gap-4">
-        <div class="rounded bg-surface-soft p-4 text-center">
-          <div class="text-[13px] font-bold text-slate-500">전체</div>
-          <div class="mt-2 text-[32px] font-black text-slate-950">{{ findings|length }}</div>
+      <div class="grid grid-cols-5 gap-3">
+        <div class="rounded bg-red-50 p-3 text-center">
+          <div class="text-[11px] font-bold text-error">전체</div>
+          <div class="mt-1 text-[28px] font-black text-error">{{ findings|length }}</div>
         </div>
-        <div class="rounded bg-amber-50 p-4 text-center">
-          <div class="text-[13px] font-bold text-amber-700">XSS</div>
-          <div class="mt-2 text-[32px] font-black text-amber-700">{{ xss_cnt }}</div>
+        <div class="rounded bg-amber-50 p-3 text-center">
+          <div class="text-[11px] font-bold text-amber-700">XSS</div>
+          <div class="mt-1 text-[28px] font-black text-amber-700">{{ xss_cnt }}</div>
         </div>
-        <div class="rounded bg-red-50 p-4 text-center">
-          <div class="text-[13px] font-bold text-error">SQLi</div>
-          <div class="mt-2 text-[32px] font-black text-error">{{ sqli_cnt }}</div>
+        <div class="rounded bg-red-50 p-3 text-center">
+          <div class="text-[11px] font-bold text-error">SQLi</div>
+          <div class="mt-1 text-[28px] font-black text-error">{{ sqli_cnt }}</div>
+        </div>
+        <div class="rounded bg-purple-50 p-3 text-center">
+          <div class="text-[11px] font-bold text-purple-700">BAC</div>
+          <div class="mt-1 text-[28px] font-black text-purple-700">{{ bac_cnt }}</div>
+        </div>
+        <div class="rounded bg-blue-50 p-3 text-center">
+          <div class="text-[11px] font-bold text-blue-700">Misc</div>
+          <div class="mt-1 text-[28px] font-black text-blue-700">{{ misconfig_cnt }}</div>
         </div>
       </div>
       {% else %}
@@ -105,14 +113,14 @@
     </div>
   </div>
 
-  {# ── 취약점 상세 목록 ── #}
-  {% if findings %}
+  {# ── 취약점 목록 (Primary) ── #}
   <div class="flex min-h-0 flex-col overflow-hidden rounded border border-surface-line bg-white">
     <div class="border-b border-surface-line bg-surface-soft px-6 py-4">
-      <h2 class="text-[18px] font-black text-slate-950">취약점 상세 목록</h2>
+      <h2 class="text-[18px] font-black text-slate-950">취약점 목록</h2>
     </div>
+    {% if findings %}
     <div class="min-h-0 overflow-auto px-6 py-5">
-      <table class="w-full min-w-[1000px] border-separate border-spacing-0 text-left text-[14px]">
+      <table class="w-full min-w-[900px] border-separate border-spacing-0 text-left text-[14px]">
         <thead>
           <tr class="text-[13px] font-bold text-slate-500">
             <th class="border-b border-surface-line px-3 pb-3">유형</th>
@@ -125,71 +133,197 @@
         </thead>
         <tbody>
           {% for f in findings %}
+          {% set mod = (f.module or '')|lower %}
           <tr class="hover:bg-slate-50">
-            <td class="border-b border-slate-100 px-3 py-3">
+            <td class="border-b border-slate-100 px-3 py-3 whitespace-nowrap">
               <span class="rounded px-2 py-1 font-mono text-[12px] font-extrabold
-                {% if 'xss' in (f.vuln_type or '')|lower %}bg-amber-100 text-amber-800
-                {% elif 'sql' in (f.vuln_type or '')|lower %}bg-red-100 text-red-800
+                {% if 'xss' in mod %}bg-amber-100 text-amber-800
+                {% elif 'sql' in mod %}bg-red-100 text-red-800
+                {% elif 'bac' in mod %}bg-purple-100 text-purple-800
+                {% elif 'misconfig' in mod %}bg-blue-100 text-blue-800
                 {% else %}bg-slate-100 text-slate-700{% endif %}">
-                {{ f.vuln_type or '-' }}
+                {{ f.module or '-' }}
               </span>
+              {% if f.type == 'MISCONFIG_WARNING' %}
+              <span class="ml-1 rounded bg-amber-50 px-1.5 py-0.5 font-mono text-[10px] text-amber-700">경고</span>
+              {% endif %}
             </td>
-            <td class="max-w-[260px] truncate border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-600" title="{{ f.url }}">{{ f.url or f.point }}</td>
-            <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] font-bold">{{ f.param or '-' }}</td>
-            <td class="max-w-[320px] truncate border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-700" title="{{ f.payload }}">{{ f.payload }}</td>
+            <td class="max-w-[260px] truncate border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-600 cursor-pointer"
+                title="{{ f.url or f.point }}"
+                onclick="this.classList.toggle('max-w-[260px]'); this.classList.toggle('truncate')">{{ f.url or f.point }}</td>
+            <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px]">{{ f.param or '-' }}</td>
+            <td class="max-w-[280px] truncate border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-700 cursor-pointer"
+                title="{{ f.payload }}"
+                onclick="this.classList.toggle('max-w-[280px]'); this.classList.toggle('truncate')">{{ f.payload or '-' }}</td>
             <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px]">{{ f.status or '-' }}</td>
-            <td class="max-w-[300px] truncate border-b border-slate-100 px-3 py-3 text-[13px] text-slate-600" title="{{ f.evidence }}">{{ f.evidence }}</td>
+            <td class="max-w-[320px] truncate border-b border-slate-100 px-3 py-3 text-[13px] text-slate-600 cursor-pointer"
+                title="{{ f.evidence }}"
+                onclick="this.classList.toggle('max-w-[320px]'); this.classList.toggle('truncate')">{{ f.evidence or '-' }}</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
+    {% else %}
+    <div class="py-12 text-center text-[14px] text-slate-400">탐지된 취약점 없음</div>
+    {% endif %}
   </div>
-  {% endif %}
 
-  {# ── 실행 상세 목록 ── #}
+  {# ── 전체 테스트 로그 (접기/펼치기) ── #}
   {% if exec_results %}
-  <div class="flex min-h-0 flex-col overflow-hidden rounded border border-surface-line bg-white">
-    <div class="border-b border-surface-line bg-surface-soft px-6 py-4">
-      <h2 class="text-[18px] font-black text-slate-950">퍼징 실행 상세</h2>
-    </div>
-    <div class="min-h-0 overflow-auto px-6 py-5">
-      <table class="w-full min-w-[1100px] border-separate border-spacing-0 text-left text-[14px]">
-        <thead>
-          <tr class="text-[13px] font-bold text-slate-500">
-            <th class="border-b border-surface-line px-3 pb-3">ID</th>
-            <th class="border-b border-surface-line px-3 pb-3">포인트</th>
-            <th class="border-b border-surface-line px-3 pb-3">파라미터</th>
-            <th class="border-b border-surface-line px-3 pb-3">위치</th>
-            <th class="border-b border-surface-line px-3 pb-3">유형</th>
-            <th class="border-b border-surface-line px-3 pb-3">페이로드</th>
-            <th class="border-b border-surface-line px-3 pb-3">상태</th>
-            <th class="border-b border-surface-line px-3 pb-3">응답시간</th>
-            <th class="border-b border-surface-line px-3 pb-3">오류</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in exec_results %}
-          <tr class="hover:bg-slate-50 {% if r.error %}bg-red-50{% endif %}">
-            <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-400">{{ r.id }}</td>
-            <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px]">{{ r.point }}</td>
-            <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] font-bold">{{ r.inject_param or '-' }}</td>
-            <td class="border-b border-slate-100 px-3 py-3 text-[13px]">{{ r.inject_location or '-' }}</td>
-            <td class="border-b border-slate-100 px-3 py-3">
-              {% set vt = (r.meta or {}).get('vuln_type', '') if r.meta else '' %}
-              {% if vt %}<span class="rounded bg-slate-100 px-2 py-1 font-mono text-[11px]">{{ vt }}</span>{% else %}-{% endif %}
-            </td>
-            <td class="max-w-[320px] truncate border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-700" title="{{ r.payload }}">{{ r.payload }}</td>
-            <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px]">{{ r.status or '-' }}</td>
-            <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px]">{% if r.elapsed %}{{ "%.3f"|format(r.elapsed) }}s{% else %}-{% endif %}</td>
-            <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-error">{{ r.error or '' }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+  <div class="rounded border border-surface-line bg-white" id="exec-section">
+    <button onclick="toggleExecLog()"
+      class="flex w-full items-center justify-between px-6 py-4 text-left hover:bg-surface-soft">
+      <span class="text-[16px] font-black text-slate-950">전체 테스트 로그</span>
+      <div class="flex items-center gap-3">
+        <span class="font-mono text-[12px] text-slate-500">{{ exec_total }}건</span>
+        <span id="exec-chevron" class="material-symbols-outlined text-[20px] text-slate-400 transition-transform">expand_more</span>
+      </div>
+    </button>
+    <div id="exec-log-body" class="hidden border-t border-surface-line">
+      <div class="flex items-center justify-between px-6 py-3 bg-surface-soft border-b border-surface-line">
+        <select id="filter-type" onchange="applyFilter()" class="rounded border border-surface-line bg-white px-3 py-1.5 font-mono text-[12px] text-slate-700 focus:outline-none">
+          <option value="all">전체</option>
+          <option value="xss">XSS</option>
+          <option value="sqli">SQLi</option>
+          <option value="error">오류만</option>
+        </select>
+        <span id="page-info" class="font-mono text-[12px] text-slate-500"></span>
+      </div>
+      <div class="overflow-auto px-6 py-5">
+        <table class="w-full min-w-[1000px] border-separate border-spacing-0 text-left text-[14px]" id="exec-table">
+          <thead>
+            <tr class="text-[13px] font-bold text-slate-500">
+              <th class="border-b border-surface-line px-3 pb-3">포인트</th>
+              <th class="border-b border-surface-line px-3 pb-3">파라미터</th>
+              <th class="border-b border-surface-line px-3 pb-3">유형</th>
+              <th class="border-b border-surface-line px-3 pb-3">페이로드</th>
+              <th class="border-b border-surface-line px-3 pb-3">상태</th>
+              <th class="border-b border-surface-line px-3 pb-3">응답시간</th>
+              <th class="border-b border-surface-line px-3 pb-3">오류</th>
+            </tr>
+          </thead>
+          <tbody id="exec-tbody">
+            {% for r in exec_results %}
+            {% set vt = ((r.meta or {}).get('vuln_type', '') if r.meta else '')|lower %}
+            <tr class="exec-row hover:bg-slate-50 {% if r.error %}bg-red-50{% endif %}"
+                data-type="{{ vt }}"
+                data-error="{{ 'true' if r.error else 'false' }}">
+              <td class="max-w-[220px] truncate border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-600 cursor-pointer"
+                  title="{{ r.point }}" onclick="this.classList.toggle('max-w-[220px]'); this.classList.toggle('truncate')">{{ r.point }}</td>
+              <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] font-bold">{{ r.inject_param or '-' }}</td>
+              <td class="border-b border-slate-100 px-3 py-3">
+                {% if vt %}
+                <span class="rounded px-2 py-1 font-mono text-[11px] {% if 'xss' in vt %}bg-amber-100 text-amber-800{% elif 'sql' in vt %}bg-red-100 text-red-800{% else %}bg-slate-100 text-slate-700{% endif %}">{{ vt }}</span>
+                {% else %}-{% endif %}
+              </td>
+              <td class="max-w-[280px] truncate border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-700 cursor-pointer"
+                  title="{{ r.payload }}" onclick="this.classList.toggle('max-w-[280px]'); this.classList.toggle('truncate')">{{ r.payload }}</td>
+              <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px]">{{ r.status or '-' }}</td>
+              <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px]">{% if r.elapsed %}{{ "%.3f"|format(r.elapsed) }}s{% else %}-{% endif %}</td>
+              <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-error">{{ r.error or '' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="flex items-center justify-between border-t border-surface-line px-6 py-3">
+        <button id="btn-prev" onclick="changePage(-1)"
+          class="inline-flex h-8 items-center gap-1 rounded border border-surface-line bg-white px-3 text-[13px] font-bold text-slate-700 hover:bg-surface-soft disabled:opacity-30 disabled:cursor-not-allowed">
+          <span class="material-symbols-outlined text-[16px]">chevron_left</span>이전
+        </button>
+        <div id="page-btns" class="flex gap-1"></div>
+        <button id="btn-next" onclick="changePage(1)"
+          class="inline-flex h-8 items-center gap-1 rounded border border-surface-line bg-white px-3 text-[13px] font-bold text-slate-700 hover:bg-surface-soft disabled:opacity-30 disabled:cursor-not-allowed">
+          다음<span class="material-symbols-outlined text-[16px]">chevron_right</span>
+        </button>
+      </div>
     </div>
   </div>
   {% endif %}
 
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const PAGE_SIZE = 10;
+let currentPage = 1;
+let filteredRows = [];
+let execLogOpen = false;
+
+function toggleExecLog() {
+  execLogOpen = !execLogOpen;
+  document.getElementById('exec-log-body').classList.toggle('hidden', !execLogOpen);
+  document.getElementById('exec-chevron').style.transform = execLogOpen ? 'rotate(180deg)' : '';
+  if (execLogOpen && filteredRows.length === 0) {
+    applyFilter();
+  }
+}
+
+function getAllRows() {
+  return Array.from(document.querySelectorAll('.exec-row'));
+}
+
+function applyFilter() {
+  const type = document.getElementById('filter-type').value;
+  filteredRows = getAllRows().filter(row => {
+    if (type === 'all') return true;
+    if (type === 'error') return row.dataset.error === 'true';
+    return row.dataset.type.includes(type);
+  });
+  currentPage = 1;
+  renderPage();
+}
+
+function renderPage() {
+  const total = filteredRows.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (currentPage > totalPages) currentPage = totalPages;
+
+  const start = (currentPage - 1) * PAGE_SIZE;
+  const end = start + PAGE_SIZE;
+
+  getAllRows().forEach(r => r.style.display = 'none');
+  filteredRows.slice(start, end).forEach(r => r.style.display = '');
+
+  document.getElementById('page-info').textContent =
+    total === 0 ? '0건' : `${start + 1}–${Math.min(end, total)} / ${total}건`;
+
+  document.getElementById('btn-prev').disabled = currentPage <= 1;
+  document.getElementById('btn-next').disabled = currentPage >= totalPages;
+
+  const container = document.getElementById('page-btns');
+  container.innerHTML = '';
+  pageRange(currentPage, totalPages).forEach(p => {
+    if (p === '...') {
+      const span = document.createElement('span');
+      span.className = 'flex h-8 w-6 items-center justify-center text-[13px] text-slate-400';
+      span.textContent = '…';
+      container.appendChild(span);
+      return;
+    }
+    const btn = document.createElement('button');
+    btn.textContent = p;
+    btn.onclick = () => { currentPage = p; renderPage(); };
+    btn.className = p === currentPage
+      ? 'h-8 min-w-[32px] rounded border border-slate-800 bg-slate-800 px-2 text-[13px] font-bold text-white'
+      : 'h-8 min-w-[32px] rounded border border-surface-line bg-white px-2 text-[13px] font-bold text-slate-700 hover:bg-surface-soft';
+    container.appendChild(btn);
+  });
+}
+
+function pageRange(cur, total) {
+  if (total <= 7) return Array.from({length: total}, (_, i) => i + 1);
+  if (cur <= 4) return [1, 2, 3, 4, 5, '...', total];
+  if (cur >= total - 3) return [1, '...', total-4, total-3, total-2, total-1, total];
+  return [1, '...', cur-1, cur, cur+1, '...', total];
+}
+
+function changePage(delta) {
+  const totalPages = Math.ceil(filteredRows.length / PAGE_SIZE);
+  currentPage = Math.max(1, Math.min(currentPage + delta, totalPages));
+  renderPage();
+}
+</script>
 {% endblock %}

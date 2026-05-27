@@ -219,11 +219,17 @@ def _task_validate(run_path_fn, emit_progress=None):
 
 def _task_misconfig(run_path_fn, target_url, emit_progress=None):
     from misconfig.checker import run as misconfig_run
+    from findings import load_findings, save_findings
 
     def _prog(n):
         if emit_progress: emit_progress(n)
 
     findings_file = run_path_fn("findings.json")
+
+    # 재실행 시 기존 misconfig 결과만 제거하고 xss/sqli 결과는 유지
+    existing = load_findings(findings_file)
+    non_misconfig = [f for f in existing if f.get("module") != "misconfig"]
+    save_findings(non_misconfig, findings_file)
 
     print(f"[MISCONFIG] target: {target_url}")
     findings = misconfig_run(

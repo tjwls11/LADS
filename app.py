@@ -430,6 +430,7 @@ def findings_page():
 
     xss_cnt       = sum(1 for f in findings if f.get("module") == "xss")
     sqli_cnt      = sum(1 for f in findings if f.get("module") == "sqli")
+    bac_cnt       = sum(1 for f in findings if f.get("module") == "bac")
     misconfig_cnt = sum(1 for f in findings if f.get("module") == "misconfig")
 
     all_results = []
@@ -452,16 +453,18 @@ def findings_page():
     for mf in findings:
         if mf.get("module") != "misconfig":
             continue
+        is_confirmed = mf.get("type") == "MISCONFIG_CONFIRMED"
         all_results.append({
-            "_vulnerable": True,
-            "_evidence":   mf.get("evidence", ""),
-            "_vuln_type":  "misconfig",
-            "url":         mf.get("url", ""),
-            "method":      "GET",
+            "_vulnerable":  is_confirmed,
+            "_warning":     not is_confirmed,
+            "_evidence":    mf.get("evidence", ""),
+            "_vuln_type":   mf.get("type", "misconfig"),
+            "url":          mf.get("url", ""),
+            "method":       "GET",
             "inject_param": None,
-            "payload":     "",
-            "status":      mf.get("status"),
-            "error":       None,
+            "payload":      "",
+            "status":       mf.get("status"),
+            "error":        None,
         })
 
     return render_template(
@@ -469,6 +472,7 @@ def findings_page():
         findings=findings,
         xss_cnt=xss_cnt,
         sqli_cnt=sqli_cnt,
+        bac_cnt=bac_cnt,
         misconfig_cnt=misconfig_cnt,
         safe_cnt=safe_cnt,
         all_results=all_results,
@@ -600,13 +604,15 @@ def run_detail(run_id):
 
     files = set(os.listdir(run_dir))
 
-    findings, xss_cnt, sqli_cnt = [], 0, 0
+    findings, xss_cnt, sqli_cnt, bac_cnt, misconfig_cnt = [], 0, 0, 0, 0
     if "findings.json" in files:
         try:
             with open(os.path.join(run_dir, "findings.json"), encoding="utf-8") as f:
                 findings = json.load(f)
-            xss_cnt = sum(1 for fi in findings if fi.get("module") == "xss")
-            sqli_cnt = sum(1 for fi in findings if fi.get("module") == "sqli")
+            xss_cnt      = sum(1 for fi in findings if fi.get("module") == "xss")
+            sqli_cnt     = sum(1 for fi in findings if fi.get("module") == "sqli")
+            bac_cnt      = sum(1 for fi in findings if fi.get("module") == "bac")
+            misconfig_cnt = sum(1 for fi in findings if fi.get("module") == "misconfig")
         except Exception:
             pass
 
@@ -615,9 +621,9 @@ def run_detail(run_id):
         try:
             with open(os.path.join(run_dir, "execution_results.json"), encoding="utf-8") as f:
                 exec_results = json.load(f)
-            exec_ok = sum(1 for r in exec_results if r.get("error") is None)
+            exec_ok      = sum(1 for r in exec_results if r.get("error") is None)
             exec_timeout = sum(1 for r in exec_results if r.get("error") == "timeout")
-            exec_err = sum(1 for r in exec_results if r.get("error") and r.get("error") != "timeout")
+            exec_err     = sum(1 for r in exec_results if r.get("error") and r.get("error") != "timeout")
         except Exception:
             pass
 
@@ -635,6 +641,8 @@ def run_detail(run_id):
         findings=findings,
         xss_cnt=xss_cnt,
         sqli_cnt=sqli_cnt,
+        bac_cnt=bac_cnt,
+        misconfig_cnt=misconfig_cnt,
         exec_results=exec_results,
         exec_total=len(exec_results),
         exec_ok=exec_ok,
