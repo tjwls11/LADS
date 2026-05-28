@@ -133,7 +133,7 @@ def build_tasks(
         if not isinstance(point_payloads, dict):
             continue
 
-        inject_location = p.get("location") or _guess_location(method)
+        inject_location = _guess_location(method)
 
         # points_meta에 명시적 base_params가 있으면 우선 사용
         if p.get("base_params"):
@@ -173,7 +173,6 @@ def build_tasks(
                     "base_cookies": base_cookies or {},
                     "base_value": base_value,
                     "payload": payload,
-                    "enctype": p.get("enctype", ""),
                     "meta": meta,
                 })
                 tid += 1
