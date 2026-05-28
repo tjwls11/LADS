@@ -29,7 +29,7 @@ DB_ERROR_KEYWORDS = (
 
 _BOOL_TRUE = re.compile(
     r"1\s*=\s*1"
-    r"|'\s*([a-z0-9])\s*'\s*=\s*'\s*\1"          # 'a'='a'
+    r"|'\s*([a-z0-9])\s*'\s*=\s*'\s*\1"
     r"|\bor\s+1\b"
     r"|\band\s+1\s*=\s*1"
     r"|\btrue\b"
@@ -49,10 +49,10 @@ _BOOL_FALSE = re.compile(
 )
 
 _BOOL_PROBE = re.compile(
-    r"ascii\(.+\)\s*[=><]"                       # ascii(substring(...))>64
-    r"|(?:substr|substring|mid)\([^)]+\)\s*[=><]"  # substring(db,1,1)='a'
-    r"|length\(.+\)\s*=\s*\d+"                   # length(db)=6
-    r"|.+\s+regexp\s+",                          # MID(...) REGEXP '^[a-z]'
+    r"ascii\(.+\)\s*[=><]"
+    r"|(?:substr|substring|mid)\([^)]+\)\s*[=><]"
+    r"|length\(.+\)\s*=\s*\d+"
+    r"|.+\s+regexp\s+",
     re.IGNORECASE,
 )
 
@@ -123,7 +123,6 @@ def _check_error_based(body: str) -> Optional[str]:
     return None
 
 
-
 def validate_sqli(test_result: dict) -> tuple[bool, str]:
     if not test_result:
         return False, "검증 불가 (입력 없음)"
@@ -147,9 +146,14 @@ def validate_sqli(test_result: dict) -> tuple[bool, str]:
     return False, "안전함 (SQLi 시그니처 미검출)"
 
 
-
 def detect_boolean_group(results: list[dict]) -> list[dict]:
-
+    """
+    판정 단계:
+      [confirmed] TRUE+FALSE 짝 있고 응답 차이 >= 5%
+      [suspected] TRUE+FALSE 짝 있고 응답 동일 + DB 에러 시그니처 동반
+      [candidate] TRUE+FALSE 짝 있지만 응답 동일, DB 에러 없음
+      [candidate] TRUE 또는 FALSE 한쪽만 있음
+    """
     sqli_results = [
         r for r in results
         if not r.get("error")
@@ -206,29 +210,31 @@ def detect_boolean_group(results: list[dict]) -> list[dict]:
                 )
             best = true_items[0]
             detected.append({"result": best, "evidence": evidence})
+            continue
 
-        else:
-            candidate_items = true_items or false_items
-            if candidate_items:
-                kind = "TRUE" if true_items else "FALSE"
-                sample_body = (candidate_items[0].get("response_body") or "").lower()
-                error_note = " + DB 에러 동반" if _has_db_error(sample_body) else ""
-                evidence = (
-                    f"Boolean SQLi candidate ({kind} only): "
-                    f"{len(candidate_items)}개 페이로드 시도, "
-                    f"짝 페이로드 부재로 응답 비교 불가{error_note}"
-                )
-                best = candidate_items[0]
-                detected.append({"result": best, "evidence": evidence})
+        candidate_items = true_items or false_items
+        if candidate_items:
+            kind = "TRUE" if true_items else "FALSE"
+            sample_body = (candidate_items[0].get("response_body") or "").lower()
+            error_note = " + DB 에러 동반" if _has_db_error(sample_body) else ""
+            evidence = (
+                f"Boolean SQLi candidate ({kind} only): "
+                f"{len(candidate_items)}개 페이로드 시도, "
+                f"짝 페이로드 부재로 응답 비교 불가{error_note}"
+            )
+            best = candidate_items[0]
+            detected.append({"result": best, "evidence": evidence})
 
     return detected
 
 
 def detect_probe_group(results: list[dict]) -> list[dict]:
+    """ASCII/SUBSTRING/MID/REGEXP/LENGTH=N 등 정찰 페이로드 전용."""
     probe_results = [
         r for r in results
         if not r.get("error")
         and r.get("response_body")
+        and ("sqli" in _vuln_type(r) or "sql" in _vuln_type(r))
         and _BOOL_PROBE.search(r.get("payload") or "")
     ]
 
@@ -275,9 +281,7 @@ def detect_probe_group(results: list[dict]) -> list[dict]:
     return detected
 
 
-
 def detect_orderby_group(results: list[dict]) -> list[dict]:
-
     orderby_results = [
         r for r in results
         if not r.get("error")
