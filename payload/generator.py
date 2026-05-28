@@ -25,8 +25,26 @@ except ImportError:
 from payload.filter import filter_payloads, deduplicate
 
 
-COUNT = 7
-BASELINE_LIMIT = 8
+COUNT = 3
+BASELINE_LIMIT = 4
+
+
+def _sample_diverse(payloads: list[dict], limit: int) -> list[dict]:
+    """타입별 round-robin 샘플링 — 단순 슬라이싱으로 생기는 단일 타입 편중 방지."""
+    from collections import defaultdict
+    by_type: dict[str, list[dict]] = defaultdict(list)
+    for p in payloads:
+        by_type[p.get("type", "unknown")].append(p)
+
+    result: list[dict] = []
+    groups = list(by_type.values())
+    i = 0
+    while len(result) < limit and any(groups):
+        g = groups[i % len(groups)]
+        if g:
+            result.append(g.pop(0))
+        i += 1
+    return result
 
 
 def _select_baseline_payloads(point: dict, vuln_type: str) -> list[dict]:
@@ -66,7 +84,7 @@ def _select_baseline_payloads(point: dict, vuln_type: str) -> list[dict]:
     else:
         payloads = []
 
-    return payloads[:BASELINE_LIMIT]
+    return _sample_diverse(payloads, BASELINE_LIMIT)
 
 
 def generate_payloads(
