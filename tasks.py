@@ -114,7 +114,7 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     print(f"[CRAWL] targets saved: {targets_file} ({len(targets)})")
 
 
-def _task_payload(payloads_file, targets_file=None, emit_progress=None):
+def _task_payload(payloads_file, emit_progress=None):
     from payload.generator import run as generate_run
 
     def _prog(n):
@@ -122,7 +122,7 @@ def _task_payload(payloads_file, targets_file=None, emit_progress=None):
 
     os.makedirs("results", exist_ok=True)
     print(f"[PAYLOAD] generate: {payloads_file}")
-    generate_run(out_file=payloads_file, targets_file=targets_file)
+    generate_run(out_file=payloads_file)
     _prog(30)
 
 
@@ -240,6 +240,33 @@ def _task_misconfig(run_path_fn, target_url, emit_progress=None):
     _prog(100)
 
 
+def _task_bac_vertical(run_path_fn, target_url=None, emit_progress=None):
+    from bac.vertical import run_vertical_probe
+
+    def _prog(n):
+        if emit_progress: emit_progress(n)
+
+    crawl_file = run_path_fn("crawl_result.json")
+    if not os.path.exists(crawl_file):
+        print(f"[BAC] missing crawl result file: {crawl_file}")
+        return
+
+    if target_url:
+        from crawl.auth import login_all_roles
+        print("[BAC] refreshing session cookies before vertical probe")
+        role_sessions = login_all_roles(base_url=target_url)
+        for role, cookies in role_sessions.items():
+            with open(run_path_fn(f"auth_cookies_{role}.json"), "w", encoding="utf-8") as f:
+                json.dump(cookies, f, ensure_ascii=False, indent=2)
+
+    results = run_vertical_probe(
+        run_path_fn,
+        progress_callback=lambda done, total: _prog(int(done / max(total, 1) * 100)),
+    )
+    print(f"[BAC] vertical done: {len(results)} results")
+    _prog(100)
+
+
 def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_crawl=False, emit_progress=None):
     def _prog(n):
         if emit_progress: emit_progress(n)
@@ -266,7 +293,7 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
         print(f"[PAYLOAD] 기존 페이로드 재사용 ({_cnt}개) — 새로 생성하려면 파일 삭제 후 재스캔")
         _prog(30)
     else:
-        _task_payload(payloads_file, targets_file=run_path_fn("targets.json"), emit_progress=emit_progress)
+        _task_payload(payloads_file, emit_progress=emit_progress)
         _prog(30)
 
     if not os.path.exists(payloads_file):
@@ -292,3 +319,5 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
 
     _task_misconfig(run_path_fn, target_url, emit_progress)
     _prog(100)
+
+    _task_bac_vertical(run_path_fn, target_url=target_url, emit_progress=emit_progress)

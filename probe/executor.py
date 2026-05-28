@@ -103,7 +103,7 @@ def execute(
         url = t.get("url")
         method = str(t.get("method", "GET")).upper()
 
-        if not url or payload is None or not inject_param:
+        if not url:
             results.append({**base, "error": "invalid_task"})
             continue
 
@@ -111,6 +111,49 @@ def execute(
         base_headers = dict(t.get("base_headers") or {})
         base_cookies = dict(t.get("base_cookies") or {})
         base_value = str(t.get("base_value") or "")
+
+        if inject_mode == "noop":
+            params = dict(base_params) or None
+            data = None
+            headers = dict(base_headers)
+            cookies = dict(base_cookies)
+            started = time.perf_counter()
+            try:
+                resp = session.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                    cookies=cookies,
+                    timeout=timeout,
+                    allow_redirects=True,
+                )
+                elapsed = time.perf_counter() - started
+                try:
+                    body_text = resp.text
+                except Exception:
+                    body_text = None
+                results.append({
+                    **base,
+                    "url": url,
+                    "method": method,
+                    "status": resp.status_code,
+                    "length": len(resp.content) if resp.content is not None else None,
+                    "elapsed": round(elapsed, 3),
+                    "response_body": body_text[:20000] if body_text else None,
+                })
+            except requests.Timeout:
+                elapsed = time.perf_counter() - started
+                results.append({**base, "url": url, "method": method, "status": None, "length": 0, "elapsed": round(elapsed, 3), "response_body": None, "error": "timeout"})
+            except Exception as e:
+                elapsed = time.perf_counter() - started
+                results.append({**base, "url": url, "method": method, "status": None, "length": 0, "elapsed": round(elapsed, 3), "response_body": None, "error": f"exception:{type(e).__name__}"})
+            if progress_callback and total > 0:
+                progress_callback(i + 1, total)
+            continue
+
+        if payload is None or not inject_param:
+            results.append({**base, "error": "invalid_task"})
+            continue
 
         if t.get("needs_csrf_refresh") and method == "POST":
             src = t.get("source_url", "")
