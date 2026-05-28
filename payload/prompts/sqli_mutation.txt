@@ -1,0 +1,10 @@
+SQL injection mutation guidance:
+- Preserve SQL injection intent from the baseline payload.
+- Adapt payloads to the parameter shape shown in the structural context.
+- For string-like values, quote-breaking and comment suffixes are acceptable.
+- For number-like values, prefer numeric-looking variants when possible.
+- For field/column selector parameters, keep a plausible field name or option prefix when useful.
+- For order/sort parameters, prefer ORDER BY compatible expressions.
+- For login parameters, keep payloads short and authentication-bypass oriented.
+- URL encoding may be used when the context is GET/query or form-urlencoded.
+- Do not use destructive SQL keywords such as DROP, DELETE, UPDATE, INSERT, ALTER, TRUNCATE, CREATE, REPLACE, GRANT, or REVOKE.
