@@ -117,7 +117,7 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     print(f"[CRAWL] targets saved: {targets_file} ({len(targets)})")
 
 
-def _task_payload(payloads_file, targets_file=None, emit_progress=None):
+def _task_payload(payloads_file, emit_progress=None):
     from payload.generator import run as generate_run
     os.makedirs("results", exist_ok=True)
     print(f"[PAYLOAD] generate: {payloads_file}")
@@ -247,6 +247,56 @@ def _task_misconfig(run_path_fn, target_url, emit_progress=None):
     _prog(emit_progress, 100)
 
 
+
+
+def _task_bac_vertical(run_path_fn, target_url=None, emit_progress=None):
+    from bac.vertical import run_vertical_probe
+
+    def _prog(n):
+        if emit_progress: emit_progress(n)
+
+    crawl_file = run_path_fn("crawl_result.json")
+    if not os.path.exists(crawl_file):
+        print(f"[BAC] missing crawl result file: {crawl_file}")
+        return
+
+    if target_url:
+        from crawl.auth import login_all_roles
+        print("[BAC] refreshing session cookies before vertical probe")
+        role_sessions = login_all_roles(base_url=target_url)
+        for role, cookies in role_sessions.items():
+            with open(run_path_fn(f"auth_cookies_{role}.json"), "w", encoding="utf-8") as f:
+                json.dump(cookies, f, ensure_ascii=False, indent=2)
+
+    results = run_vertical_probe(
+        run_path_fn,
+        progress_callback=lambda done, total: _prog(int(done / max(total, 1) * 100)),
+    )
+    print(f"[BAC] vertical done: {len(results)} results")
+    _prog(100)
+
+
+def _task_bac_vertical(run_path_fn, target_url=None, emit_progress=None):
+
+    crawl_file = run_path_fn("crawl_result.json")
+    if not os.path.exists(crawl_file):
+        print(f"[BAC] missing crawl result file: {crawl_file}")
+        return
+
+    if target_url:
+        from crawl.auth import login_all_roles
+        print("[BAC] refreshing session cookies before vertical probe")
+        role_sessions = login_all_roles(base_url=target_url)
+        for role, cookies in role_sessions.items():
+            with open(run_path_fn(f"auth_cookies_{role}.json"), "w", encoding="utf-8") as f:
+                json.dump(cookies, f, ensure_ascii=False, indent=2)
+
+    results = run_vertical_probe(
+        run_path_fn,
+        progress_callback=lambda done, total: _prog(int(done / max(total, 1) * 100)),
+    )
+    print(f"[BAC] vertical done: {len(results)} results")
+    _prog(100)
 
 
 def _task_all(run_path_fn, target_url, payloads_file, skip_crawl=False, emit_progress=None):
