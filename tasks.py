@@ -117,13 +117,13 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     print(f"[CRAWL] targets saved: {targets_file} ({len(targets)})")
 
 
-def _task_payload(payloads_file, emit_progress=None):
+def _task_payload(payloads_file, targets_file=None, emit_progress=None):
     from payload.generator import run as generate_run
     os.makedirs("results", exist_ok=True)
     print(f"[PAYLOAD] generate: {payloads_file}")
 
-    def _payload_cb(emit_progress,idx, total):
-        _prog(emit_progress,20 + int(idx / max(total, 1) * 10))
+    def _payload_cb(idx, total):
+        _prog(emit_progress, 20 + int(idx / max(total, 1) * 10))
 
     generate_run(out_file=payloads_file, targets_file=targets_file, progress_callback=_payload_cb)
     _prog(emit_progress,30)
