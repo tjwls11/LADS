@@ -36,9 +36,10 @@ def _load_json(path: str, default):
 
 # 역할별 인증 쿠키를 로드하여 반환
 def load_role_cookies(run_path_fn: Callable[[str], str]) -> dict[str, dict]:
+    all_cookies = _load_json(run_path_fn("auth_cookies_roles.json"), {})
     role_cookies: dict[str, dict] = {"guest": {}}
     for role in ("member", "admin"):
-        cookies = _load_json(run_path_fn(f"auth_cookies_{role}.json"), {})
+        cookies = all_cookies.get(role, {})
         if cookies:
             role_cookies[role] = cookies
     return role_cookies
