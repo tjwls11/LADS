@@ -191,7 +191,7 @@ def _task_payload():
 
 
 def _task_probe():
-    _probe_impl(_run_path, PAYLOADS_FILE, PAYLOADS_META_FILE, _emit_progress)
+    _probe_impl(_run_path, PAYLOADS_FILE, _emit_progress)
 
 
 def _task_execute():
@@ -207,7 +207,7 @@ def _task_misconfig():
 
 
 def _task_all(skip_crawl: bool = False):
-    _all_impl(_run_path, _active_url(), PAYLOADS_FILE, PAYLOADS_META_FILE, skip_crawl=skip_crawl, emit_progress=_emit_progress)
+    _all_impl(_run_path, _active_url(), PAYLOADS_FILE, skip_crawl=skip_crawl, emit_progress=_emit_progress)
 
 
 _TASK_FUNCS = {
