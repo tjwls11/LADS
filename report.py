@@ -36,10 +36,10 @@ def generate(run_id: str, run_dir: str) -> bytes:
     except Exception:
         ts = run_id
 
-    xss_cnt  = sum(1 for f in findings if f.get("module") == "xss")
-    sqli_cnt = sum(1 for f in findings if f.get("module") == "sqli")
-    bac_cnt  = sum(1 for f in findings if f.get("module") == "bac")
-    other_cnt = len(findings) - xss_cnt - sqli_cnt - bac_cnt
+    xss_cnt       = sum(1 for f in findings if f.get("module") == "xss")
+    sqli_cnt      = sum(1 for f in findings if f.get("module") == "sqli")
+    bac_cnt       = sum(1 for f in findings if f.get("module") == "bac")
+    misconfig_cnt = sum(1 for f in findings if f.get("module") == "misconfig")
 
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -66,9 +66,9 @@ def generate(run_id: str, run_dir: str) -> bytes:
     pdf.cell(0, 8, "Summary", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
 
-    col_w = 45
-    headers = ["Total", "XSS", "SQLi", "BAC", "Other"]
-    values  = [str(len(findings)), str(xss_cnt), str(sqli_cnt), str(bac_cnt), str(other_cnt)]
+    col_w = 38
+    headers = ["Total", "XSS", "SQLi", "BAC", "Misconfig"]
+    values  = [str(len(findings)), str(xss_cnt), str(sqli_cnt), str(bac_cnt), str(misconfig_cnt)]
 
     pdf.set_font("Helvetica", "B", 10)
     pdf.set_fill_color(242, 244, 246)
@@ -99,13 +99,13 @@ def generate(run_id: str, run_dir: str) -> bytes:
         if pdf.get_y() > 255:
             pdf.add_page()
 
-        vtype = _vuln_label(f.get("vuln_type", ""))
+        vtype = _vuln_label(f.get("module", ""))
 
         # 번호 + 타입
         pdf.set_font("Helvetica", "B", 11)
         pdf.set_text_color(9, 20, 38)
         pdf.set_fill_color(238, 242, 247)
-        pdf.cell(0, 8, f"  [{i}] {vtype}  -  {f.get('point', '')}", fill=True, new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 8, f"  [{i}] {vtype}  -  {f.get('category', '')}", fill=True, new_x="LMARGIN", new_y="NEXT")
 
         # 세부 정보
         pdf.set_font("Helvetica", "", 10)
