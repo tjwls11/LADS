@@ -34,6 +34,7 @@ from tasks import (
     _task_execute as _execute_impl,
     _task_validate as _validate_impl,
     _task_misconfig as _misconfig_impl,
+    _task_bac as _bac_impl,
     _task_all as _all_impl,
     TASK_LABELS as _TASK_LABELS,
 )
@@ -210,6 +211,10 @@ def _task_all(skip_crawl: bool = False):
     _all_impl(_run_path, _active_url(), PAYLOADS_FILE, skip_crawl=skip_crawl, emit_progress=_emit_progress)
 
 
+def _task_bac():
+    _bac_impl(_run_path, _active_url(), _emit_progress)
+
+
 _TASK_FUNCS = {
     "crawl":    _task_crawl,
     "payload":  _task_payload,
@@ -217,6 +222,7 @@ _TASK_FUNCS = {
     "execute":  _task_execute,
     "validate": _task_validate,
     "misconfig": _task_misconfig,
+    "bac":      _task_bac,
     "all":      _task_all,
 }
 
@@ -229,8 +235,7 @@ def stream_task(task):
     skip_crawl = request.args.get("skip_crawl") == "1"
     q = queue.Queue()
 
-    # 전체 스캔(all)이고 크롤링도 새로 하는 경우 → 새 런 자동 생성
-    if task == "all" and not skip_crawl:
+    if (task == "all" and not skip_crawl) or task == "bac":
         global _current_run_id
         _current_run_id = _make_run_id()
         os.makedirs(os.path.join(RUNS_DIR, _current_run_id), exist_ok=True)
@@ -289,19 +294,20 @@ def _list_runs() -> list[dict]:
         except Exception:
             ts = d
         findings_cnt = 0
-        if "findings.json" in files:
-            try:
-                with open(os.path.join(full, "findings.json"), encoding="utf-8") as f:
-                    findings_cnt = len(json.load(f))
-            except Exception:
-                pass
+        for findings_file in ("findings.json", "bac_findings.json"):
+            if findings_file in files:
+                try:
+                    with open(os.path.join(full, findings_file), encoding="utf-8") as f:
+                        findings_cnt += len(json.load(f))
+                except Exception:
+                    pass
         runs.append({
             "id": d,
             "ts": ts,
             "is_current": d == _current_run_id,
             "has_crawl": "crawl_result.json" in files,
-            "has_exec": "execution_results.json" in files,
-            "has_findings": "findings.json" in files,
+            "has_exec": "execution_results.json" in files or "bac_vertical_results.json" in files,
+            "has_findings": "findings.json" in files or "bac_findings.json" in files,
             "findings_cnt": findings_cnt,
         })
     return runs
@@ -412,6 +418,27 @@ def index():
         summary=_get_quick_summary(),
         exec_summary=_get_exec_summary(),
         targets=_get_target_envs(),
+        current_run=_current_run_id or "",
+    )
+
+
+@app.route("/bac")
+def bac_page():
+    bac_findings_file = _run_path("bac_findings.json")
+    bac_findings = []
+    if os.path.exists(bac_findings_file):
+        try:
+            with open(bac_findings_file, encoding="utf-8") as f:
+                bac_findings = json.load(f)
+        except Exception:
+            pass
+    return render_template(
+        "bac.html",
+        bac_findings=bac_findings,
+        bac_cnt=len(bac_findings),
+        has_crawl=os.path.exists(_run_path("crawl_result.json")),
+        has_bac_results=os.path.exists(_run_path("bac_vertical_results.json")),
+        has_bac_findings=os.path.exists(bac_findings_file),
         current_run=_current_run_id or "",
     )
 
