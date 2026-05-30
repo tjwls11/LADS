@@ -9,7 +9,7 @@ _DESTRUCTIVE_SQL_RE = re.compile(
     re.IGNORECASE,
 )
 
-SKIP_OPERATORS = {"and", "or", "asc", "desc", "move"}
+SKIP_OPERATORS = {"and", "or", "move"}
 SKIP_FIELD_TYPES = {"checkbox", "radio"}
 
 
@@ -112,7 +112,7 @@ def _get_baseline_records_by_type(vtype: str) -> list[dict]:
 def build_tasks(
     payloads: Any,
     targets: Any | None = None,
-    base_cookies: dict | None = None,
+    base_cookie: dict | None = None,
     progress_callback=None,
 ) -> list[dict]:
     if not payloads or not targets:
@@ -187,7 +187,7 @@ def build_tasks(
                     "inject_param": name,
                     "inject_mode": "replace",
                     "base_params": base_params,
-                    "base_cookies": base_cookies or {},
+                    "base_cookies": base_cookie or {},
                     "base_value": value,
                     "payload": payload,
                     "enctype": target.get("enctype", ""),

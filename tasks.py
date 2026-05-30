@@ -100,13 +100,6 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
         json.dump(merged_pages, f, ensure_ascii=False, indent=2)
     print(f"[CRAWL] saved: {crawl_file}")
 
-    # 일단 세션은 member 하나로 유지
-    main_cookies = role_sessions.get("member") or {}
-    if main_cookies:
-        with open(run_path_fn("auth_cookies.json"), "w", encoding="utf-8") as f:
-            json.dump(main_cookies, f, ensure_ascii=False, indent=2)
-        print(f"[CRAWL] auth cookies saved: {len(main_cookies)} cookies")
-
     _prog(emit_progress, 20)
 
     targets = build_targets(merged_pages)
@@ -143,16 +136,16 @@ def _task_probe(run_path_fn, payloads_file, emit_progress=None):
     with open(targets_file, encoding="utf-8") as f:
         targets = json.load(f)
 
-    base_cookies: dict = {}
-    cookies_file = run_path_fn("auth_cookies.json")
-    if os.path.exists(cookies_file):
-        with open(cookies_file, encoding="utf-8") as f:
-            base_cookies = json.load(f)
-        print(f"[PROBE] auth cookies loaded: {len(base_cookies)} cookies")
+    base_cookie: dict = {}
+    roles_file = run_path_fn("auth_cookies_roles.json")
+    if os.path.exists(roles_file):
+        with open(roles_file, encoding="utf-8") as f:
+            base_cookie = json.load(f).get("member") or {}
+        print(f"[PROBE] 일반 유저 로그인됨")
     else:
-        print("[PROBE] no auth cookies — requests will be unauthenticated")
+        print("[PROBE] 인증 파일 없음. 인증없이 진행")
 
-    tasks = build_tasks(payloads, targets, base_cookies=base_cookies)
+    tasks = build_tasks(payloads, targets, base_cookie=base_cookie)
     with open(probe_tasks_file, "w", encoding="utf-8") as f:
         json.dump(tasks, f, ensure_ascii=False, indent=2)
     print(f"[PROBE] tasks saved: {probe_tasks_file} ({len(tasks)})")
