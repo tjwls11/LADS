@@ -8,7 +8,7 @@ from openai import OpenAI
 class LLMClient:
     def __init__(
         self,
-        model: str = "gpt-4o-mini",               # OpenAI GPT-4o-mini (비용 절감)
+        model: str = "gpt-4o",                    # OpenAI GPT-4o
         api_key: Optional[str] = None,
         max_retries: int = 3,
         retry_delay: float = 2.0,
