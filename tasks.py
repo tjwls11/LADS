@@ -211,6 +211,7 @@ def _task_bac_vertical(run_path_fn, target_url=None, emit_progress=None):
 
     results = run_vertical_probe(
         run_path_fn,
+        include_path_patterns=True,
         progress_callback=lambda done, total: _prog(emit_progress, int(done / max(total, 1) * 100)),
     )
     print(f"[BAC] vertical done: {len(results)} results")

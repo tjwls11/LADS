@@ -58,7 +58,7 @@
     <div class="rounded border border-surface-line bg-white p-6">
       <h2 class="mb-4 text-[16px] font-black text-slate-950">취약점 요약</h2>
       {% if has_findings %}
-      <div class="grid grid-cols-3 gap-4">
+      <div class="grid grid-cols-4 gap-4">
         <div class="rounded bg-surface-soft p-4 text-center">
           <div class="text-[13px] font-bold text-slate-500">전체</div>
           <div class="mt-2 text-[32px] font-black text-slate-950">{{ findings|length }}</div>
@@ -70,6 +70,10 @@
         <div class="rounded bg-red-50 p-4 text-center">
           <div class="text-[13px] font-bold text-error">SQLi</div>
           <div class="mt-2 text-[32px] font-black text-error">{{ sqli_cnt }}</div>
+        </div>
+        <div class="rounded bg-orange-50 p-4 text-center">
+          <div class="text-[13px] font-bold text-orange-700">BAC</div>
+          <div class="mt-2 text-[32px] font-black text-orange-700">{{ bac_cnt }}</div>
         </div>
       </div>
       {% else %}
@@ -127,11 +131,13 @@
           {% for f in findings %}
           <tr class="hover:bg-slate-50">
             <td class="border-b border-slate-100 px-3 py-3">
+              {% set display_type = f.module or f.vuln_type or '' %}
               <span class="rounded px-2 py-1 font-mono text-[12px] font-extrabold
-                {% if 'xss' in (f.vuln_type or '')|lower %}bg-amber-100 text-amber-800
-                {% elif 'sql' in (f.vuln_type or '')|lower %}bg-red-100 text-red-800
+                {% if 'xss' in display_type|lower %}bg-amber-100 text-amber-800
+                {% elif 'sql' in display_type|lower %}bg-red-100 text-red-800
+                {% elif 'bac' in display_type|lower %}bg-orange-100 text-orange-800
                 {% else %}bg-slate-100 text-slate-700{% endif %}">
-                {{ f.vuln_type or '-' }}
+                {{ display_type or '-' }}
               </span>
             </td>
             <td class="max-w-[260px] truncate border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-600" title="{{ f.url }}">{{ f.url or f.point }}</td>

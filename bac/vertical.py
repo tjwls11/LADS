@@ -14,7 +14,11 @@ ROLE_ORDER = ("guest", "member", "admin")
 TASKS_FILE = "bac_vertical_tasks.json"
 RESULTS_FILE = "bac_vertical_results.json"
 
-ADMIN_PATH_RE = re.compile(r"/(?:adm|admin|administrator|manager)(?:/|$)", re.IGNORECASE)
+ADMIN_PATH_RE = re.compile(
+    r"/(?:adm|admin|administrator|admincp|wp-admin|manager|manage|management|"
+    r"backend|backoffice|console|control-panel|controlpanel|cpanel|dashboard|staff)(?:/|$)",
+    re.IGNORECASE,
+)
 DESTRUCTIVE_PATH_RE = re.compile(
     r"(delete|del_|remove|update|insert|write_update|save|logout|upload|drop)",
     re.IGNORECASE,
@@ -54,7 +58,7 @@ def _is_safe_get_candidate(url: str) -> bool:
 # 크롤 결과에서 관리자 전용 URL 후보를 수집
 def collect_admin_urls(
     crawl_pages: list[dict],
-    include_path_patterns: bool = False,
+    include_path_patterns: bool = True,
     limit: int | None = None,
 ) -> list[dict]:
     candidates: list[dict] = []
@@ -141,7 +145,7 @@ def run_vertical_probe(
     run_path_fn: Callable[[str], str],
     timeout: int = 10,
     delay: float = 0.0,
-    include_path_patterns: bool = False,
+    include_path_patterns: bool = True,
     limit: int | None = None,
     progress_callback=None,
 ) -> list[dict]:

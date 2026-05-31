@@ -108,6 +108,8 @@ def _apply_active_target_env(target: dict) -> None:
 
 _TARGETS: list[dict] = _load_targets()
 _active_target_key: str = _TARGETS[0]["key"] if _TARGETS else ""
+if _TARGETS:
+    _apply_active_target_env(_TARGETS[0])
 _current_run_id: str | None = None
 
 app = Flask(__name__, template_folder='web/templates', static_folder='web/static')
@@ -146,6 +148,16 @@ def _init_run() -> None:
 
 def _run_path(filename: str, run_id: str | None = None) -> str:
     return os.path.join(RUNS_DIR, run_id or _current_run_id or "default", filename)
+
+
+def _load_json_or(path: str, default):
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
 
 
 def _active_url() -> str:
@@ -453,6 +465,8 @@ def findings_page():
     run_id = request.args.get("run") or _current_run_id
     findings_file = _run_path("findings.json", run_id=run_id)
     exec_file = _run_path("execution_results.json", run_id=run_id)
+    bac_findings_file = _run_path("bac_findings.json", run_id=run_id)
+    bac_exec_file = _run_path("bac_vertical_results.json", run_id=run_id)
 
     findings = []
     if os.path.exists(findings_file):
@@ -462,8 +476,11 @@ def findings_page():
         except Exception as exc:
             return f"결과 파일 읽기 오류: {exc}", 500
 
+    findings.extend(_load_json_or(bac_findings_file, []))
+
     xss_cnt       = sum(1 for f in findings if f.get("module") == "xss")
     sqli_cnt      = sum(1 for f in findings if f.get("module") == "sqli")
+    bac_cnt       = sum(1 for f in findings if f.get("module") == "bac")
     misconfig_cnt = sum(1 for f in findings if f.get("module") == "misconfig")
 
     all_results = []
@@ -483,6 +500,22 @@ def findings_page():
         except Exception:
             pass
 
+    if os.path.exists(bac_exec_file):
+        try:
+            findings_by_id = {f.get("id"): f for f in findings}
+            with open(bac_exec_file, encoding="utf-8") as f:
+                bac_exec_results = json.load(f)
+            for r in bac_exec_results:
+                hit = findings_by_id.get(r.get("id"))
+                meta = r.get("meta") or {}
+                r["_vulnerable"] = hit is not None
+                r["_evidence"] = hit.get("evidence", "") if hit else ""
+                r["_vuln_type"] = hit.get("module", "") if hit else meta.get("vuln_type", "bac")
+                r["_role"] = meta.get("role", "")
+            all_results.extend(bac_exec_results)
+        except Exception:
+            pass
+
     for mf in findings:
         if mf.get("module") != "misconfig":
             continue
@@ -498,11 +531,14 @@ def findings_page():
             "error":       None,
         })
 
+    safe_cnt = sum(1 for r in all_results if not r.get("_vulnerable") and not r.get("error"))
+
     return render_template(
         "findings.html",
         findings=findings,
         xss_cnt=xss_cnt,
         sqli_cnt=sqli_cnt,
+        bac_cnt=bac_cnt,
         misconfig_cnt=misconfig_cnt,
         safe_cnt=safe_cnt,
         all_results=all_results,
@@ -638,26 +674,31 @@ def run_detail(run_id):
 
     files = set(os.listdir(run_dir))
 
-    findings, xss_cnt, sqli_cnt = [], 0, 0
+    findings, xss_cnt, sqli_cnt, bac_cnt = [], 0, 0, 0
     if "findings.json" in files:
         try:
             with open(os.path.join(run_dir, "findings.json"), encoding="utf-8") as f:
                 findings = json.load(f)
-            xss_cnt = sum(1 for fi in findings if fi.get("module") == "xss")
-            sqli_cnt = sum(1 for fi in findings if fi.get("module") == "sqli")
         except Exception:
             pass
+    if "bac_findings.json" in files:
+        findings.extend(_load_json_or(os.path.join(run_dir, "bac_findings.json"), []))
+    xss_cnt = sum(1 for fi in findings if fi.get("module") == "xss")
+    sqli_cnt = sum(1 for fi in findings if fi.get("module") == "sqli")
+    bac_cnt = sum(1 for fi in findings if fi.get("module") == "bac")
 
     exec_results, exec_ok, exec_timeout, exec_err = [], 0, 0, 0
     if "execution_results.json" in files:
         try:
             with open(os.path.join(run_dir, "execution_results.json"), encoding="utf-8") as f:
                 exec_results = json.load(f)
-            exec_ok = sum(1 for r in exec_results if r.get("error") is None)
-            exec_timeout = sum(1 for r in exec_results if r.get("error") == "timeout")
-            exec_err = sum(1 for r in exec_results if r.get("error") and r.get("error") != "timeout")
         except Exception:
             pass
+    if "bac_vertical_results.json" in files:
+        exec_results.extend(_load_json_or(os.path.join(run_dir, "bac_vertical_results.json"), []))
+    exec_ok = sum(1 for r in exec_results if r.get("error") is None)
+    exec_timeout = sum(1 for r in exec_results if r.get("error") == "timeout")
+    exec_err = sum(1 for r in exec_results if r.get("error") and r.get("error") != "timeout")
 
     return render_template(
         "run_detail.html",
@@ -667,12 +708,13 @@ def run_detail(run_id):
         has_crawl="crawl_result.json" in files,
         has_targets="targets.json" in files,
         has_payload=os.path.exists(PAYLOADS_FILE),
-        has_probe="probe_tasks.json" in files,
-        has_exec="execution_results.json" in files,
-        has_findings="findings.json" in files,
+        has_probe="probe_tasks.json" in files or "bac_vertical_tasks.json" in files,
+        has_exec="execution_results.json" in files or "bac_vertical_results.json" in files,
+        has_findings="findings.json" in files or "bac_findings.json" in files,
         findings=findings,
         xss_cnt=xss_cnt,
         sqli_cnt=sqli_cnt,
+        bac_cnt=bac_cnt,
         exec_results=exec_results,
         exec_total=len(exec_results),
         exec_ok=exec_ok,
