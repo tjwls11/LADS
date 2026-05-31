@@ -129,21 +129,70 @@ def _make_run_id() -> str:
     return datetime.now().strftime("run_%Y%m%d_%H%M%S")
 
 
-def _init_run() -> None:
-    global _current_run_id
-    os.makedirs(RUNS_DIR, exist_ok=True)
-    existing = sorted(
+def _run_dir(run_id: str) -> str:
+    return os.path.join(RUNS_DIR, run_id)
+
+
+def _infer_run_type(run_id: str) -> str:
+    run_dir = _run_dir(run_id)
+    meta = _load_json_or(os.path.join(run_dir, "run_meta.json"), {})
+    run_type = meta.get("run_type")
+    if run_type in {"main", "bac"}:
+        return run_type
+
+    try:
+        files = set(os.listdir(run_dir))
+    except Exception:
+        return "main"
+    if "bac_vertical_results.json" in files or "bac_findings.json" in files or "bac_vertical_tasks.json" in files:
+        return "bac"
+    return "main"
+
+
+def _write_run_meta(run_id: str, run_type: str) -> None:
+    meta = {
+        "run_type": run_type,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "target_url": _active_url(),
+    }
+    with open(os.path.join(_run_dir(run_id), "run_meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+
+
+def _create_run(run_type: str) -> str:
+    run_id = _make_run_id()
+    os.makedirs(_run_dir(run_id), exist_ok=True)
+    _write_run_meta(run_id, run_type)
+    return run_id
+
+
+def _list_run_ids() -> list[str]:
+    if not os.path.exists(RUNS_DIR):
+        return []
+    return sorted(
         [
             d for d in os.listdir(RUNS_DIR)
             if os.path.isdir(os.path.join(RUNS_DIR, d)) and d.startswith("run_")
         ],
         reverse=True,
     )
+
+
+def _latest_run_id(run_type: str | None = None) -> str | None:
+    for run_id in _list_run_ids():
+        if run_type is None or _infer_run_type(run_id) == run_type:
+            return run_id
+    return None
+
+
+def _init_run() -> None:
+    global _current_run_id
+    os.makedirs(RUNS_DIR, exist_ok=True)
+    existing = _list_run_ids()
     if existing:
         _current_run_id = existing[0]
     else:
-        _current_run_id = _make_run_id()
-        os.makedirs(os.path.join(RUNS_DIR, _current_run_id), exist_ok=True)
+        _current_run_id = _create_run("main")
 
 
 def _run_path(filename: str, run_id: str | None = None) -> str:
@@ -247,10 +296,18 @@ def stream_task(task):
     skip_crawl = request.args.get("skip_crawl") == "1"
     q = queue.Queue()
 
-    if (task == "all" and not skip_crawl) or task == "bac":
-        global _current_run_id
-        _current_run_id = _make_run_id()
-        os.makedirs(os.path.join(RUNS_DIR, _current_run_id), exist_ok=True)
+    global _current_run_id
+    if task == "all" and skip_crawl:
+        latest_main_run = _latest_run_id("main")
+        if latest_main_run:
+            _current_run_id = latest_main_run
+        else:
+            _current_run_id = _create_run("main")
+            skip_crawl = False
+    elif task == "all":
+        _current_run_id = _create_run("main")
+    elif task == "bac":
+        _current_run_id = _create_run("bac")
 
     def run_in_thread():
         acquired = _task_lock.acquire(blocking=False)
@@ -305,6 +362,7 @@ def _list_runs() -> list[dict]:
             ts = datetime.strptime(d, "run_%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
         except Exception:
             ts = d
+        run_type = _infer_run_type(d)
         findings_cnt = 0
         for findings_file in ("findings.json", "bac_findings.json"):
             if findings_file in files:
@@ -316,6 +374,7 @@ def _list_runs() -> list[dict]:
         runs.append({
             "id": d,
             "ts": ts,
+            "run_type": run_type,
             "is_current": d == _current_run_id,
             "has_crawl": "crawl_result.json" in files,
             "has_exec": "execution_results.json" in files or "bac_vertical_results.json" in files,
@@ -656,8 +715,7 @@ def runs_page():
 @app.route("/runs/new", methods=["POST"])
 def new_run():
     global _current_run_id
-    _current_run_id = _make_run_id()
-    os.makedirs(os.path.join(RUNS_DIR, _current_run_id), exist_ok=True)
+    _current_run_id = _create_run("main")
     return redirect("/")
 
 
@@ -673,6 +731,7 @@ def run_detail(run_id):
         ts = run_id
 
     files = set(os.listdir(run_dir))
+    run_type = _infer_run_type(run_id)
 
     findings, xss_cnt, sqli_cnt, bac_cnt = [], 0, 0, 0
     if "findings.json" in files:
@@ -704,6 +763,7 @@ def run_detail(run_id):
         "run_detail.html",
         run_id=run_id,
         ts=ts,
+        run_type=run_type,
         is_current=(run_id == _current_run_id),
         has_crawl="crawl_result.json" in files,
         has_targets="targets.json" in files,
