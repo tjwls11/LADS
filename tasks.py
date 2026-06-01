@@ -69,7 +69,10 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     targets_file = run_path_fn("targets.json")
 
     # 역할별 세션 쿠키 획득
-    role_sessions = login_all_roles(base_url=target_url)
+    role_sessions = login_all_roles(
+        base_url=target_url,
+        roles=("guest", "member1"),
+    )
     acquired = [r for r in role_sessions if role_sessions[r] or r == "guest"]
     print(f"[CRAWL] 현재 로그인 세션: {acquired}")
 
@@ -146,7 +149,8 @@ def _task_probe(run_path_fn, payloads_file, emit_progress=None):
     roles_file = run_path_fn("auth_cookies_roles.json")
     if os.path.exists(roles_file):
         with open(roles_file, encoding="utf-8") as f:
-            base_cookie = json.load(f).get("member") or {}
+            saved_roles = json.load(f)
+            base_cookie = saved_roles.get("member1") or saved_roles.get("member") or {}
         print(f"[PROBE] 일반 유저 로그인됨")
     else:
         print("[PROBE] 인증 파일 없음. 인증없이 진행")
@@ -190,7 +194,10 @@ def _task_bac_vertical(run_path_fn, target_url=None, emit_progress=None):
     if target_url:
         from crawl.auth import login_all_roles
         print("[BAC] refreshing session cookies before vertical probe")
-        refreshed = login_all_roles(base_url=target_url)
+        refreshed = login_all_roles(
+            base_url=target_url,
+            roles=("guest", "member1", "admin"),
+        )
 
         roles_file = run_path_fn("auth_cookies_roles.json")
         existing: dict = {}
@@ -222,7 +229,10 @@ def _task_bac_crawl(run_path_fn, target_url, emit_progress=None):
     crawl_file   = run_path_fn("crawl_result.json")
     targets_file = run_path_fn("targets.json")
 
-    role_sessions = login_all_roles(base_url=target_url)
+    role_sessions = login_all_roles(
+        base_url=target_url,
+        roles=("guest", "member1", "admin"),
+    )
     acquired = [r for r in role_sessions if role_sessions[r] or r == "guest"]
     print(f"[BAC CRAWL] 세션: {acquired}")
 
@@ -266,7 +276,7 @@ def _task_bac_crawl(run_path_fn, target_url, emit_progress=None):
 
 
 def _task_bac(run_path_fn, target_url=None, emit_progress=None):
-    # 1. BAC 전용 크롤링 (3세션: guest + member + admin)
+    # 1. BAC 전용 크롤링 (3세션: guest + member1 + admin)
     _task_bac_crawl(run_path_fn, target_url,
                     emit_progress=lambda pct: _prog(emit_progress, int(pct * 20 / 20)))
 

@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from probe.executor import execute
 
 
-ROLE_ORDER = ("guest", "member", "admin")
+ROLE_ORDER = ("guest", "member1", "admin")
 TASKS_FILE = "bac_vertical_tasks.json"
 RESULTS_FILE = "bac_vertical_results.json"
 
@@ -42,8 +42,10 @@ def _load_json(path: str, default):
 def load_role_cookies(run_path_fn: Callable[[str], str]) -> dict[str, dict]:
     all_cookies = _load_json(run_path_fn("auth_cookies_roles.json"), {})
     role_cookies: dict[str, dict] = {"guest": {}}
-    for role in ("member", "admin"):
+    for role in ("member1", "admin"):
         cookies = all_cookies.get(role, {})
+        if role == "member1" and not cookies:
+            cookies = all_cookies.get("member", {})
         if cookies:
             role_cookies[role] = cookies
     return role_cookies
@@ -70,7 +72,7 @@ def collect_admin_urls(
             continue
 
         accessible_by = {str(r).lower() for r in page.get("accessible_by", [])}
-        admin_only = "admin" in accessible_by and not ({"guest", "member", "member2", "user"} & accessible_by)
+        admin_only = "admin" in accessible_by and not ({"guest", "member", "member1", "member2", "user"} & accessible_by)
 
         if admin_only:
             source = "accessible_by_admin_only"

@@ -157,7 +157,7 @@ def validate_bac(test_result: dict) -> tuple[bool, str]:
     if size < MIN_VULN_BODY_SIZE:
         return False, f"안전함 (빈 응답 size={size})"
 
-    if role in ("guest", "member", "user"):
+    if role in ("guest", "member", "member1", "user"):
         return True, f"[VULNERABLE] vertical_escalation — '{role}' 권한으로 '{url}' 접근 성공 (size={size})"
 
     return False, "안전함 (role 정보 없음, 그룹 분석 대기)"
@@ -187,11 +187,11 @@ def detect_bac_group(results: list[dict]) -> list[dict]:
             by_role[_get_role(r)] = r
 
         admin      = by_role.get("admin")
-        member     = by_role.get("member") or by_role.get("user")
+        member1     = by_role.get("member1") or by_role.get("member") or by_role.get("user")
         guest      = by_role.get("guest") or by_role.get("unknown")
         admin_data = _extract(admin) if admin else None
 
-        for low_role_name, low_resp in [("member", member), ("guest", guest)]:
+        for low_role_name, low_resp in [("member1", member1), ("guest", guest)]:
             if not low_resp:
                 continue
 
