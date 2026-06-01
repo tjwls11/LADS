@@ -22,11 +22,11 @@ except ImportError:
     from baseline import xss as baseline_xss
     from point_builder import build_points_from_targets
 
-from payload.filter import filter_payloads, deduplicate
+from payload.validator import filter_payloads, deduplicate
 
 
-COUNT = 3
-BASELINE_LIMIT = 4
+COUNT = 7
+BASELINE_LIMIT = 8
 
 
 def _sample_diverse(payloads: list[dict], limit: int) -> list[dict]:

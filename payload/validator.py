@@ -151,6 +151,7 @@ def report(original: List, filtered: List, rejected: List):
     print()
 
 
+# 검증 테스트 (직접 실행 시)
 if __name__ == "__main__":
     from payload.parser import parse
 

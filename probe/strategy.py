@@ -36,14 +36,16 @@ def _guess_location(method: str) -> str:
     return "body" if method.upper() == "POST" else "query"
 
 
-def _get_baseline_records(point_name: str, vuln_types: list[str]) -> list[dict]:
+def _get_baseline_records(point_name: str, vuln_types: list[str], method: str = "GET") -> list[dict]:
     """point 이름 기반으로 baseline 페이로드 레코드 반환."""
     vtype = vuln_types[0] if vuln_types else "generic"
     records: list[dict] = []
 
     if "xss" in point_name:
-        from payload.baseline.xss import get_all as xss_get_all
-        for bp in xss_get_all():
+        from payload.baseline.xss import get_by_strength as xss_get_by_strength
+        # get_by_strength("HIGH"): BODY+ATTR_VALUE+FILTER_BYPASS+SCRIPT_CONTEXT+STORED 혼합 25개
+        # 단일 컨텍스트(attr_value 21개 / stored 13개)보다 커버리지 넓음
+        for bp in xss_get_by_strength("HIGH"):
             records.append({
                 "vtype": vtype,
                 "type": bp.get("type"),
@@ -189,7 +191,7 @@ def build_tasks(
 
         # 2. Baseline 페이로드 (LLM과 중복 제외)
         vuln_types = p.get("vuln_types") or []
-        for rec in _get_baseline_records(name, vuln_types):
+        for rec in _get_baseline_records(name, vuln_types, method=method):
             _emit(rec.get("payload"), rec["vtype"], rec.get("type"), rec.get("family"))
 
     return out
