@@ -1,8 +1,16 @@
 function toggleMenu(force) {
-  var menu = document.getElementById('mobile-menu');
-  if (!menu) return;
-  if (force === false) menu.classList.add('hidden');
-  else menu.classList.toggle('hidden');
+  var sidebar  = document.getElementById('sidebar');
+  var backdrop = document.getElementById('sidebar-backdrop');
+  if (!sidebar) return;
+  var isOpen = !sidebar.classList.contains('-translate-x-full');
+  var shouldOpen = force === true ? true : force === false ? false : !isOpen;
+  if (shouldOpen) {
+    sidebar.classList.remove('-translate-x-full');
+    if (backdrop) backdrop.classList.remove('hidden');
+  } else {
+    sidebar.classList.add('-translate-x-full');
+    if (backdrop) backdrop.classList.add('hidden');
+  }
 }
 
 var _es = null;
@@ -122,6 +130,16 @@ function _updatePipelineCardForStage(stageLabel) {
   });
 }
 
+function _resetPipelineCards() {
+  document.querySelectorAll('.pipeline-step-card').forEach(function(card) {
+    card.className = 'pipeline-step-card pending';
+    var icon   = card.querySelector('.pipeline-node .material-symbols-outlined');
+    var status = card.querySelector('.pipeline-status');
+    if (icon)   icon.textContent   = card.dataset.icon || 'circle';
+    if (status) { status.textContent = 'Waiting'; status.className = 'pipeline-status'; }
+  });
+}
+
 function _startStream(url) {
   if (_es) {
     _es.close();
@@ -144,6 +162,7 @@ function _startStream(url) {
   logArea.textContent = '';
   _setButtons(true);
   _updateProgressBar(0);
+  if (taskName === 'all') _resetPipelineCards();
 
   _es = new EventSource(url);
 
@@ -227,3 +246,68 @@ function _startStream(url) {
     logArea.appendChild(row);
   };
 }
+
+// ── 스캔 상태 폴링 (모든 페이지 공통) ─────────────────────────
+function _updateScanBadge(status) {
+  var badge = document.getElementById('nav-scan-badge');
+  var label = document.getElementById('nav-scan-label');
+  if (!badge) return;
+  if (status && status.running) {
+    badge.classList.remove('hidden');
+    if (label) label.textContent = (_labels[status.task] || status.task) + ' 진행 중';
+  } else {
+    badge.classList.add('hidden');
+  }
+}
+
+function _pollScanStatus() {
+  fetch('/api/status')
+    .then(function(r) { return r.json(); })
+    .then(function(status) {
+      _updateScanBadge(status);
+
+      // 메인 페이지에서 실행 중인데 스트림이 없으면 재연결 (버퍼 로그부터 수신)
+      if (status.running && !_es) {
+        var logArea = document.getElementById('log-area');
+        if (logArea) {
+          _currentTask = status.task;
+          _currentStageTask = null;
+          _hadError = false;
+          var logTitle = document.getElementById('log-title');
+          var logBadge = document.getElementById('log-badge');
+          if (logTitle) logTitle.textContent = (_labels[status.task] || status.task) + ' 로그';
+          if (logBadge) { logBadge.textContent = 'Running'; logBadge.className = _badgeClass('running'); }
+          _setButtons(true);
+          _es = new EventSource('/stream/' + status.task);
+          _es.onmessage = function(event) {
+            if (event.data === '__DONE__') {
+              _es.close(); _es = null;
+              if (logBadge) { logBadge.textContent = 'Done'; logBadge.className = _badgeClass('ok'); }
+              _setButtons(false);
+              setTimeout(function() { location.reload(); }, 1500);
+              return;
+            }
+            if (event.data.startsWith('__PROGRESS__')) {
+              _updateProgressBar(parseInt(event.data.replace('__PROGRESS__', ''), 10));
+              return;
+            }
+            var stage = _stageFromMessage(event.data);
+            if (_currentTask === 'all' && _stageLabelToTask[stage.label]) _updatePipelineCardForStage(stage.label);
+            var row = document.createElement('div');
+            row.className = 'text-slate-500 text-[12px]';
+            row.textContent = event.data;
+            logArea.appendChild(row);
+            logArea.scrollTop = logArea.scrollHeight;
+          };
+          _es.onerror = function() { if (_es) { _es.close(); _es = null; } _setButtons(false); };
+        }
+      }
+    })
+    .catch(function() {});
+}
+
+// 페이지 로드 시 즉시 확인 + 10초마다 폴링
+document.addEventListener('DOMContentLoaded', function() {
+  _pollScanStatus();
+  setInterval(_pollScanStatus, 10000);
+});

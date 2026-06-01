@@ -116,8 +116,43 @@ app = Flask(__name__, template_folder='web/templates', static_folder='web/static
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 app.jinja_env.auto_reload = True
-_task_lock = threading.Lock()
+_task_lock    = threading.Lock()
 _thread_local = threading.local()
+_running_task: str | None = None
+
+# ── 브로드캐스트 로그 버퍼 ──────────────────────────────────────
+_log_lock        = threading.Lock()
+_log_buffer:     list[str] = []       # 최근 500줄 보관
+_log_subscribers: list[queue.Queue] = []
+_LOG_BUF_MAX = 500
+
+def _broadcast(msg: str) -> None:
+    with _log_lock:
+        _log_buffer.append(msg)
+        if len(_log_buffer) > _LOG_BUF_MAX:
+            _log_buffer.pop(0)
+        for sub in _log_subscribers:
+            try:
+                sub.put_nowait(msg)
+            except queue.Full:
+                pass
+
+def _subscribe() -> queue.Queue:
+    """새 SSE 클라이언트 등록 + 버퍼 기존 로그 전달."""
+    q: queue.Queue = queue.Queue(maxsize=2000)
+    with _log_lock:
+        for msg in _log_buffer:
+            try:
+                q.put_nowait(msg)
+            except queue.Full:
+                break
+        _log_subscribers.append(q)
+    return q
+
+def _unsubscribe(q: queue.Queue) -> None:
+    with _log_lock:
+        if q in _log_subscribers:
+            _log_subscribers.remove(q)
 
 
 
@@ -153,9 +188,7 @@ def _active_url() -> str:
 
 
 def _emit_progress(pct: int) -> None:
-    q = getattr(_thread_local, "log_queue", None)
-    if q is not None:
-        q.put(f"__PROGRESS__{max(0, min(100, int(pct)))}")
+    _broadcast(f"__PROGRESS__{max(0, min(100, int(pct)))}")
 
 
 class _RoutingStream:
@@ -163,11 +196,10 @@ class _RoutingStream:
         self._orig = original
 
     def write(self, text):
-        q = getattr(_thread_local, "log_queue", None)
-        if q is not None:
+        if _running_task is not None:
             stripped = text.rstrip("\n")
             if stripped:
-                q.put(stripped)
+                _broadcast(stripped)
         else:
             self._orig.write(text)
 
@@ -206,8 +238,8 @@ def _task_misconfig():
     _misconfig_impl(_run_path, _active_url(), _emit_progress)
 
 
-def _task_all(skip_crawl: bool = False):
-    _all_impl(_run_path, _active_url(), PAYLOADS_FILE, PAYLOADS_META_FILE, skip_crawl=skip_crawl, emit_progress=_emit_progress)
+def _task_all(skip_crawl: bool = False, resume: bool = False):
+    _all_impl(_run_path, _active_url(), PAYLOADS_FILE, PAYLOADS_META_FILE, skip_crawl=skip_crawl, resume=resume, emit_progress=_emit_progress)
 
 
 _TASK_FUNCS = {
@@ -227,50 +259,64 @@ def stream_task(task):
         return "알 수 없는 태스크", 404
 
     skip_crawl = request.args.get("skip_crawl") == "1"
-    q = queue.Queue()
+    resume     = request.args.get("resume") == "1"
 
-    # 전체 스캔(all)이고 크롤링도 새로 하는 경우 → 새 런 자동 생성
-    if task == "all" and not skip_crawl:
-        global _current_run_id
-        _current_run_id = _make_run_id()
-        os.makedirs(os.path.join(RUNS_DIR, _current_run_id), exist_ok=True)
+    # 이미 실행 중이면 태스크를 새로 시작하지 않고 기존 브로드캐스트에 구독만
+    already_running = _running_task is not None
 
-    def run_in_thread():
-        acquired = _task_lock.acquire(blocking=False)
-        if not acquired:
-            q.put("[WARN] 다른 태스크가 실행 중입니다.")
-            q.put(None)
-            return
-        _thread_local.log_queue = q
-        try:
-            if task == "all":
-                _task_all(skip_crawl=skip_crawl)
-            else:
-                _TASK_FUNCS[task]()
-        except Exception as exc:
-            q.put(f"[ERROR] {type(exc).__name__}: {exc}")
-        finally:
-            _thread_local.log_queue = None
-            _task_lock.release()
-            q.put(None)
+    if not already_running:
+        # 새 런 생성 조건
+        if task == "all" and not skip_crawl and not resume:
+            global _current_run_id
+            _current_run_id = _make_run_id()
+            os.makedirs(os.path.join(RUNS_DIR, _current_run_id), exist_ok=True)
+            # 새 런 시작 시 로그 버퍼 초기화
+            with _log_lock:
+                _log_buffer.clear()
 
-    threading.Thread(target=run_in_thread, daemon=True).start()
+        def run_in_thread():
+            global _running_task
+            acquired = _task_lock.acquire(blocking=False)
+            if not acquired:
+                _broadcast("__SYSTEM__ [WARN] 다른 태스크가 실행 중입니다.")
+                _broadcast("__DONE__")
+                return
+            _running_task = task
+            label = _TASK_LABELS.get(task, task)
+            _broadcast(f"[{label}] 시작")
+            try:
+                if task == "all":
+                    _task_all(skip_crawl=skip_crawl, resume=resume)
+                else:
+                    _TASK_FUNCS[task]()
+            except Exception as exc:
+                _broadcast(f"[ERROR] {type(exc).__name__}: {exc}")
+            finally:
+                _running_task = None
+                _task_lock.release()
+                _broadcast(f"[{label}] 완료")
+                _broadcast("__DONE__")
+
+        threading.Thread(target=run_in_thread, daemon=True).start()
+
+    # 구독 시작 (실행 중이면 버퍼 로그 + 이후 로그 수신)
+    sub = _subscribe()
 
     def generate():
-        label = _TASK_LABELS.get(task, task)
-        yield f"data: [{label}] 시작\n\n"
-        while True:
-            try:
-                msg = q.get(timeout=2)
-            except queue.Empty:
-                yield ": keepalive\n\n"
-                continue
-            if msg is None:
-                yield f"data: [{label}] 완료\n\n"
-                yield "data: __DONE__\n\n"
-                break
-            safe = msg.replace("\n", " ")
-            yield f"data: {safe}\n\n"
+        try:
+            while True:
+                try:
+                    msg = sub.get(timeout=2)
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+                    continue
+                if msg == "__DONE__":
+                    yield "data: __DONE__\n\n"
+                    break
+                safe = msg.replace("\n", " ")
+                yield f"data: {safe}\n\n"
+        finally:
+            _unsubscribe(sub)
 
     return Response(generate(), mimetype="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -588,6 +634,16 @@ def update_target(key):
 @app.route("/settings")
 def settings_page():
     return redirect("/targets")
+
+
+@app.route("/api/status")
+def api_status():
+    from flask import jsonify
+    return jsonify({
+        "running": _running_task is not None,
+        "task":    _running_task or "",
+        "run_id":  _current_run_id or "",
+    })
 
 
 @app.route("/runs")

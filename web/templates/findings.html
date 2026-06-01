@@ -3,7 +3,7 @@ block content %}
 <section class="flex min-h-[calc(100vh-80px)] flex-col gap-8">
   <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
     <div>
-      <h1 class="text-[30px] font-black leading-tight text-slate-950">
+      <h1 class="text-[22px] font-black leading-tight text-slate-950 sm:text-[30px]">
         취약점 상세 진단 결과
       </h1>
       <p class="mt-2 font-mono text-[13px] text-slate-500">
@@ -28,7 +28,7 @@ block content %}
   {% else %}
 
   <div
-    class="grid gap-5 {% if all_results %}md:grid-cols-6{% else %}md:grid-cols-5{% endif %}"
+    class="grid grid-cols-2 gap-3 sm:gap-4 sm:gap-5 {% if all_results %}sm:grid-cols-3 md:grid-cols-6{% else %}sm:grid-cols-3 md:grid-cols-5{% endif %}"
   >
     <div class="rounded border border-surface-line bg-white p-6">
       <span class="block text-[15px] font-bold text-slate-600">위험 탐지</span>
@@ -74,7 +74,7 @@ block content %}
 
   {% if all_results %}
   {% set warning_cnt = all_results | selectattr('_warning') | list | length %}
-  <div class="flex gap-2">
+  <div class="flex flex-wrap gap-2">
     <button
       onclick="filterTable('all')"
       id="btn-all"
