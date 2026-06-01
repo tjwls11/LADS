@@ -48,7 +48,24 @@
 </head>
 <body class="min-h-screen bg-background text-[15px] text-slate-950 antialiased">
   {% set path = request.path %}
-  <nav class="fixed left-0 top-0 z-40 hidden h-full w-64 flex-col border-r border-slate-200 bg-white font-medium text-slate-900 md:flex">
+
+  <!-- 모바일 백드롭 -->
+  <div id="sidebar-backdrop" onclick="toggleMenu(false)"
+       class="fixed inset-0 z-30 hidden bg-black/40 md:hidden"></div>
+
+  <!-- 사이드바 (모바일: 슬라이드-인 드로어 / md+: 항상 표시) -->
+  <nav id="sidebar"
+       class="fixed left-0 top-0 z-40 flex h-full w-64 -translate-x-full flex-col border-r border-slate-200 bg-white font-medium text-slate-900 transition-transform duration-200 ease-in-out md:translate-x-0">
+
+    <!-- 모바일 전용 드로어 헤더 -->
+    <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4 md:hidden">
+      <span class="text-[17px] font-black tracking-tight">LADS</span>
+      <button type="button" onclick="toggleMenu(false)" aria-label="메뉴 닫기"
+              class="flex h-8 w-8 items-center justify-center rounded hover:bg-slate-100">
+        <span class="material-symbols-outlined text-[22px]">close</span>
+      </button>
+    </div>
+
     <div class="flex-1 overflow-y-auto py-3">
       <a class="nav-link {% if path == '/' %}nav-active{% endif %}" href="/">
         <span class="material-symbols-outlined">timeline</span>
@@ -68,8 +85,17 @@
       </a>
     </div>
 
+    <div class="px-5 pb-2 hidden" id="nav-scan-badge">
+      <div class="flex items-center gap-2 rounded bg-amber-50 border border-amber-200 px-3 py-2 text-[13px] font-bold text-amber-700">
+        <span class="h-2 w-2 rounded-full bg-amber-400 animate-pulse"></span>
+        <span id="nav-scan-label">스캔 중...</span>
+        <a href="/" class="ml-auto text-[11px] underline hover:no-underline">보기</a>
+      </div>
+    </div>
+
     <div class="p-5">
-      <a class="flex h-12 w-full items-center justify-center gap-2 rounded-sm bg-slate-800 text-[15px] font-bold text-white hover:bg-slate-900" href="/" onclick="if(location.pathname=='/'){event.preventDefault();_startStream('/stream/all');}">
+      <a class="flex h-12 w-full items-center justify-center gap-2 rounded-sm bg-slate-800 text-[15px] font-bold text-white hover:bg-slate-900"
+         href="/" onclick="if(location.pathname=='/'){event.preventDefault();_startStream('/stream/all');}">
         <span class="material-symbols-outlined text-[20px]">play_arrow</span>
         전체 스캔 시작
       </a>
@@ -77,23 +103,17 @@
   </nav>
 
   <div class="min-h-screen md:ml-64">
-    <header class="flex h-14 items-center justify-between border-b border-slate-200 bg-white px-5 md:hidden">
-      <button type="button" onclick="toggleMenu()" aria-label="메뉴 열기">
-        <span class="material-symbols-outlined">menu</span>
+    <!-- 모바일 상단 헤더 -->
+    <header class="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-slate-200 bg-white px-4 md:hidden">
+      <button type="button" onclick="toggleMenu()" aria-label="메뉴 열기"
+              class="flex h-9 w-9 items-center justify-center rounded hover:bg-slate-100">
+        <span class="material-symbols-outlined text-[24px]">menu</span>
       </button>
-      <a class="text-lg font-black" href="/">LADS</a>
+      <a class="text-[17px] font-black" href="/">LADS</a>
+      <div class="w-9"></div>
     </header>
 
-    <nav id="mobile-menu" class="hidden border-b border-slate-200 bg-white px-6 py-4 text-[15px] font-bold md:hidden">
-      <div class="grid gap-4">
-        <a href="/">파이프라인 모니터</a>
-        <a href="/findings">취약점 목록</a>
-        <a href="/targets">타깃 설정</a>
-        <a href="/runs">실행 이력</a>
-      </div>
-    </nav>
-
-    <main class="min-h-screen bg-background px-8 py-8 md:px-10 md:py-10 2xl:px-14">
+    <main class="min-h-screen bg-background px-4 py-6 sm:px-6 sm:py-8 md:px-10 md:py-10 2xl:px-14">
       {% block content %}{% endblock %}
     </main>
   </div>
