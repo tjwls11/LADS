@@ -1,9 +1,3 @@
-"""
-findings.py - 공통 findings 스키마 정의
-
-모든 모듈(SQLi, XSS, BAC, Misconfig)이 이 포맷으로 결과를 저장한다.
-"""
-
 from __future__ import annotations
 from typing import Optional
 import json
@@ -15,9 +9,12 @@ FINDINGS_FILE = os.getenv("FINDINGS_FILE", "results/findings.json")
 # ── type 상수 ──────────────────────────────────────────────
 # SQLi
 SQLI_CONFIRMED       = "SQLI_CONFIRMED"
+SQLI_SUSPECTED       = "SQLI_SUSPECTED"
+SQLI_CANDIDATE       = "SQLI_CANDIDATE"
 
 # XSS
 XSS_CONFIRMED        = "XSS_CONFIRMED"
+XSS_STORED_CONFIRMED = "XSS_STORED_CONFIRMED"
 
 # BAC
 BAC_SUSPECTED_LOW    = "BAC_SUSPECTED_LOW"
@@ -41,6 +38,26 @@ MODULE_BAC      = "bac"
 MODULE_MISCONFIG = "misconfig"
 
 
+# ── 판정 신호(verdict) 상수 ────────────────────────────────
+# detector / validator 가 confidence 와 별개로 "확신 수준"을 표현하는 신호.
+# 이 신호를 confidence(high/medium/low)로 매핑하는 단일 출처를 둔다.
+VERDICT_CONFIRMED = "confirmed"
+VERDICT_SUSPECTED = "suspected"
+VERDICT_CANDIDATE = "candidate"
+
+# verdict -> confidence 매핑 (보고서 양형의 단일 기준)
+_VERDICT_TO_CONFIDENCE = {
+    VERDICT_CONFIRMED: HIGH,
+    VERDICT_SUSPECTED: MEDIUM,
+    VERDICT_CANDIDATE: LOW,
+}
+
+
+def verdict_to_confidence(verdict: str) -> str:
+    """판정 신호를 confidence 등급으로 변환. 알 수 없으면 LOW로 보수 처리."""
+    return _VERDICT_TO_CONFIDENCE.get((verdict or "").lower(), LOW)
+
+
 def make_finding(
     module:     str,
     type:       str,
@@ -53,24 +70,7 @@ def make_finding(
     status:     Optional[int] = None,
     extra:      Optional[dict] = None,
 ) -> dict:
-    """
-    공통 finding 딕셔너리 생성.
 
-    Args:
-        module:     sqli / xss / bac / misconfig
-        type:       SQLI_CONFIRMED, BAC_SUSPECTED_LOW 등
-        category:   error_based / reflected / admin_area / git_exposure 등
-        url:        요청 URL
-        confidence: high / medium / low
-        evidence:   판정 근거 문자열
-        param:      취약 파라미터 (없으면 None)
-        payload:    사용한 페이로드 (없으면 None)
-        status:     HTTP 응답 코드 (없으면 None)
-        extra:      모듈별 추가 정보 (없으면 None)
-
-    Returns:
-        finding dict
-    """
     finding = {
         "module":     module,
         "type":       type,
@@ -97,11 +97,12 @@ def sqli_finding(
     status:    int,
     evidence:  str,
     confidence: str = HIGH,
+    type:      str = SQLI_CONFIRMED,
 ) -> dict:
     """SQLi finding 생성 헬퍼"""
     return make_finding(
         module=MODULE_SQLI,
-        type=SQLI_CONFIRMED,
+        type=type,
         category=category,
         url=url,
         param=param,
@@ -120,11 +121,12 @@ def xss_finding(
     status:    int,
     evidence:  str,
     confidence: str = HIGH,
+    type:      str = XSS_CONFIRMED,
 ) -> dict:
     """XSS finding 생성 헬퍼"""
     return make_finding(
         module=MODULE_XSS,
-        type=XSS_CONFIRMED,
+        type=type,
         category=category,
         url=url,
         param=param,

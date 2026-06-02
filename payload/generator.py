@@ -135,7 +135,9 @@ INPUT_POINTS = [
 
 COUNT = 7  # 타입당 페이로드 수
 
-def run(out_file: str = "results/payloads_llm.json", progress_callback=None):  # 로딩바 콜백 함수
+def run(out_file: str = "results/payloads_llm.json", targets_file: str = None, progress_callback=None):  # 로딩바 콜백 함수
+    # targets_file: 크롤링 결과(targets.json) 경로. 현재는 INPUT_POINTS 고정 사용이라
+    #               받기만 하고 사용하지 않음 (호출부 호환성 유지 / 추후 동적 생성 연동 대비)
     
     print(f"\n{'='*60}")
     print(f"  Gnuboard5 Payload Generator v2")
