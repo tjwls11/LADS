@@ -1,15 +1,20 @@
 import importlib
+import time
 import json
 import os
+import io
 import queue
 import subprocess
 import sys
+import shutil
 import threading
 from datetime import datetime
+import report as report_gen
 
-from utilities import _load_json
+
+from utilities import load_json, normalize_base_url, save_json
 from dotenv import load_dotenv
-from flask import Flask, Response, redirect, render_template, request
+from flask import Flask, Response, redirect, render_template, request, send_file, jsonify
 from tasks import (
     _task_crawl as _crawl_impl,
     _task_payload as _payload_impl,
@@ -49,11 +54,9 @@ RUNS_DIR = "runs"
 
 def _load_targets() -> list[dict]:
     if os.path.exists(TARGETS_CONFIG_FILE):
-        try:
-            with open(TARGETS_CONFIG_FILE, encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
+        targets = load_json(TARGETS_CONFIG_FILE, None)
+        if targets is not None:
+            return targets
     return [
         {
             "key": "primary",
@@ -73,8 +76,7 @@ def _load_targets() -> list[dict]:
 
 
 def _save_targets(targets: list[dict]) -> None:
-    with open(TARGETS_CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(targets, f, ensure_ascii=False, indent=2)
+    save_json(TARGETS_CONFIG_FILE, targets)
 
 
 def _apply_active_target_env(target: dict) -> None:
@@ -169,7 +171,7 @@ def _run_dir(run_id: str) -> str:
 
 def _infer_run_type(run_id: str) -> str:
     run_dir = _run_dir(run_id)
-    meta = _load_json(os.path.join(run_dir, "run_meta.json"), {})
+    meta = load_json(os.path.join(run_dir, "run_meta.json"), {})
     run_type = meta.get("run_type")
     if run_type in {"main", "bac"}:
         return run_type
@@ -189,8 +191,7 @@ def _write_run_meta(run_id: str, run_type: str) -> None:
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "target_url": _active_url(),
     }
-    with open(os.path.join(_run_dir(run_id), "run_meta.json"), "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
+    save_json(os.path.join(_run_dir(run_id), "run_meta.json"), meta)
 
 
 def _create_run(run_type: str) -> str:
@@ -408,11 +409,7 @@ def _list_runs() -> list[dict]:
         findings_cnt = 0
         for findings_file in ("findings.json", "bac_findings.json"):
             if findings_file in files:
-                try:
-                    with open(os.path.join(full, findings_file), encoding="utf-8") as f:
-                        findings_cnt += len(json.load(f))
-                except Exception:
-                    pass
+                findings_cnt += len(load_json(os.path.join(full, findings_file), []))
         runs.append({
             "id": d,
             "ts": ts,
@@ -442,8 +439,7 @@ def _get_quick_summary():
     if not os.path.exists(scan_file):
         return None
     try:
-        with open(scan_file, encoding="utf-8") as f:
-            results = json.load(f)
+        results = load_json(scan_file, [])
         total = len(results)
         vulns = sum(1 for r in results if r.get("vulnerable"))
         return {"total": total, "vulns": vulns, "rate": vulns / max(total, 1) * 100}
@@ -456,8 +452,7 @@ def _get_exec_summary():
     if not os.path.exists(exec_file):
         return None
     try:
-        with open(exec_file, encoding="utf-8") as f:
-            results = json.load(f)
+        results = load_json(exec_file, [])
         total = len(results)
         ok = sum(1 for r in results if r.get("error") is None)
         timeout = sum(1 for r in results if r.get("error") == "timeout")
@@ -471,8 +466,7 @@ def _misconfig_done() -> bool:
     if not os.path.exists(p):
         return False
     try:
-        with open(p, encoding="utf-8") as f:
-            findings = json.load(f)
+        findings = load_json(p, [])
         return any(fi.get("module") == "misconfig" for fi in findings)
     except Exception:
         return False
@@ -538,13 +532,7 @@ def index():
 @app.route("/bac")
 def bac_page():
     bac_findings_file = _run_path("bac_findings.json")
-    bac_findings = []
-    if os.path.exists(bac_findings_file):
-        try:
-            with open(bac_findings_file, encoding="utf-8") as f:
-                bac_findings = json.load(f)
-        except Exception:
-            pass
+    bac_findings = load_json(bac_findings_file, [])
     return render_template(
         "bac.html",
         bac_findings=bac_findings,
@@ -577,7 +565,7 @@ def findings_page():
         except Exception as exc:
             return f"결과 파일 읽기 오류: {exc}", 500
 
-    findings.extend(_load_json(bac_findings_file, []))
+    findings.extend(load_json(bac_findings_file, []))
 
     xss_cnt       = sum(1 for f in findings if f.get("module") == "xss")
     sqli_cnt      = sum(1 for f in findings if f.get("module") == "sqli")
@@ -589,8 +577,7 @@ def findings_page():
     if os.path.exists(exec_file):
         try:
             findings_by_id = {f.get("id"): f for f in findings}
-            with open(exec_file, encoding="utf-8") as f:
-                exec_results = json.load(f)
+            exec_results = load_json(exec_file, [])
             for r in exec_results:
                 hit = findings_by_id.get(r.get("id"))
                 r["_vulnerable"] = hit is not None
@@ -603,8 +590,7 @@ def findings_page():
     if os.path.exists(bac_exec_file):
         try:
             findings_by_id = {f.get("id"): f for f in findings}
-            with open(bac_exec_file, encoding="utf-8") as f:
-                bac_exec_results = json.load(f)
+            bac_exec_results = load_json(bac_exec_file, [])
             for r in bac_exec_results:
                 hit = findings_by_id.get(r.get("id"))
                 meta = r.get("meta") or {}
@@ -688,9 +674,8 @@ def set_target():
 
 @app.route("/targets/add", methods=["POST"])
 def add_target():
-    import time
     name = request.form.get("name", "").strip()
-    url = request.form.get("url", "").strip().rstrip("/")
+    url = normalize_base_url(request.form.get("url", ""))
     if not name or not url:
         return redirect("/targets")
     key = f"target_{int(time.time())}"
@@ -753,7 +738,6 @@ def settings_page():
 
 @app.route("/api/status")
 def api_status():
-    from flask import jsonify
     return jsonify({
         "running": _running_task is not None,
         "task":    _running_task or "",
@@ -790,8 +774,7 @@ def run_detail(run_id):
     findings, xss_cnt, sqli_cnt, bac_cnt, misconfig_cnt = [], 0, 0, 0, 0
     if "findings.json" in files:
         try:
-            with open(os.path.join(run_dir, "findings.json"), encoding="utf-8") as f:
-                findings = json.load(f)
+            findings = load_json(os.path.join(run_dir, "findings.json"), [])
             xss_cnt      = sum(1 for fi in findings if fi.get("module") == "xss")
             sqli_cnt     = sum(1 for fi in findings if fi.get("module") == "sqli")
             bac_cnt      = sum(1 for fi in findings if fi.get("module") == "bac")
@@ -799,7 +782,7 @@ def run_detail(run_id):
         except Exception:
             pass
     if "bac_findings.json" in files:
-        findings.extend(_load_json(os.path.join(run_dir, "bac_findings.json"), []))
+        findings.extend(load_json(os.path.join(run_dir, "bac_findings.json"), []))
     xss_cnt = sum(1 for fi in findings if fi.get("module") == "xss")
     sqli_cnt = sum(1 for fi in findings if fi.get("module") == "sqli")
     bac_cnt = sum(1 for fi in findings if fi.get("module") == "bac")
@@ -807,15 +790,14 @@ def run_detail(run_id):
     exec_results, exec_ok, exec_timeout, exec_err = [], 0, 0, 0
     if "execution_results.json" in files:
         try:
-            with open(os.path.join(run_dir, "execution_results.json"), encoding="utf-8") as f:
-                exec_results = json.load(f)
+            exec_results = load_json(os.path.join(run_dir, "execution_results.json"), [])
             exec_ok      = sum(1 for r in exec_results if r.get("error") is None)
             exec_timeout = sum(1 for r in exec_results if r.get("error") == "timeout")
             exec_err     = sum(1 for r in exec_results if r.get("error") and r.get("error") != "timeout")
         except Exception:
             pass
     if "bac_vertical_results.json" in files:
-        exec_results.extend(_load_json(os.path.join(run_dir, "bac_vertical_results.json"), []))
+        exec_results.extend(load_json(os.path.join(run_dir, "bac_vertical_results.json"), []))
     exec_ok = sum(1 for r in exec_results if r.get("error") is None)
     exec_timeout = sum(1 for r in exec_results if r.get("error") == "timeout")
     exec_err = sum(1 for r in exec_results if r.get("error") and r.get("error") != "timeout")
@@ -856,8 +838,6 @@ def set_run(run_id):
 
 @app.route("/runs/delete/<run_id>", methods=["POST"])
 def delete_run(run_id):
-    import shutil
-
     global _current_run_id
     run_dir = os.path.join(RUNS_DIR, run_id)
     if os.path.isdir(run_dir) and run_id.startswith("run_"):
@@ -869,10 +849,6 @@ def delete_run(run_id):
 
 @app.route("/runs/<run_id>/report.pdf")
 def download_report(run_id):
-    from flask import send_file
-    import io
-    import report as report_gen
-
     run_dir = os.path.join(RUNS_DIR, run_id)
     if not os.path.isdir(run_dir):
         return "Run not found", 404

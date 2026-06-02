@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 from typing import Callable
 from urllib.parse import urlparse
-from utilities import _load_json
+from utilities import load_json, save_json
 from crawl.auth import load_cookies
 from probe.executor import execute
 
@@ -174,7 +173,7 @@ def run_vertical_probe(
     tasks_file = run_path_fn(TASKS_FILE)
     results_file = run_path_fn(RESULTS_FILE)
 
-    crawl_pages = _load_json(crawl_file, [])
+    crawl_pages = load_json(crawl_file, [])
     role_cookies = load_cookies(run_path_fn)
     candidates = collect_vertical_candidates(
         crawl_pages,
@@ -183,16 +182,20 @@ def run_vertical_probe(
     )
     tasks = build_vertical_tasks(candidates, role_cookies)
 
-    os.makedirs(os.path.dirname(tasks_file) or ".", exist_ok=True)
-    with open(tasks_file, "w", encoding="utf-8") as f:
-        json.dump(tasks, f, ensure_ascii=False, indent=2)
+    save_json(tasks_file, tasks)
+
+    scenario_counts: dict[str, int] = {}
+    for candidate in candidates:
+        scenario = candidate.get("scenario", "unknown")
+        scenario_counts[scenario] = scenario_counts.get(scenario, 0) + 1
 
     print(f"[BAC] vertical candidates={len(candidates)}, tasks={len(tasks)}")
+    for scenario, count in sorted(scenario_counts.items()):
+        print(f"[BAC] scenario {scenario}={count}")
     print(f"[BAC] tasks saved: {tasks_file}")
 
     if not tasks:
-        with open(results_file, "w", encoding="utf-8") as f:
-            json.dump([], f, ensure_ascii=False, indent=2)
+        save_json(results_file, [])
         return []
 
     results = execute(

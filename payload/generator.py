@@ -1,37 +1,29 @@
-import json
 import argparse
 import sys
 import os
-from dotenv import load_dotenv
-load_dotenv()
+from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-try:
-    from .llm_client import LLMClient
-    from .prompt_builder import SYSTEM_PROMPT, build_mutation_prompt
-    from .parser import parse as parse_llm
-    from .baseline import sqli as baseline_sqli
-    from .baseline import xss as baseline_xss
-    from .point_builder import build_points_from_targets
-except ImportError:
-    from llm_client import LLMClient
-    from prompt_builder import SYSTEM_PROMPT, build_mutation_prompt
-    from parser import parse as parse_llm
-    from baseline import sqli as baseline_sqli
-    from baseline import xss as baseline_xss
-    from point_builder import build_points_from_targets
+from dotenv import load_dotenv
+from utilities import load_json, save_json
 
+from payload.parser import parse as parse_llm
+from payload.baseline import sqli as baseline_sqli
+from payload.baseline import xss as baseline_xss
+from payload.llm_client import LLMClient
+from payload.prompt_builder import SYSTEM_PROMPT, build_mutation_prompt
+from payload.point_builder import build_points_from_targets
 from payload.filter import filter_payloads, deduplicate
 
+load_dotenv()
 
 COUNT = 3
 BASELINE_LIMIT = 4
 
 
+#타입별 round-robin 샘플링 — 단순 슬라이싱으로 생기는 단일 타입 편중 방지
 def _sample_diverse(payloads: list[dict], limit: int) -> list[dict]:
-    """타입별 round-robin 샘플링 — 단순 슬라이싱으로 생기는 단일 타입 편중 방지."""
-    from collections import defaultdict
     by_type: dict[str, list[dict]] = defaultdict(list)
     for p in payloads:
         by_type[p.get("type", "unknown")].append(p)
@@ -155,8 +147,7 @@ def run(out_file: str = "results/payloads_llm.json", progress_callback=None, tar
         print("[ERROR] 크롤링을 먼저 실행하세요.")
         return
 
-    with open(targets_file, encoding="utf-8") as f:
-        targets_data = json.load(f)
+    targets_data = load_json(targets_file, [])
 
     points = build_points_from_targets(targets_data)
     if not points:
@@ -167,14 +158,10 @@ def run(out_file: str = "results/payloads_llm.json", progress_callback=None, tar
 
     all_results = generate_payloads(points, LLMClient(), progress_callback)
 
-    os.makedirs(os.path.dirname(out_file) or ".", exist_ok=True)
-    with open(out_file, "w", encoding="utf-8") as f:
-        json.dump(all_results, f, ensure_ascii=False, indent=2)
+    save_json(out_file, all_results)
 
     meta_out = (out_file[:-5] if out_file.endswith(".json") else out_file) + "_meta.json"
-    os.makedirs(os.path.dirname(meta_out) or ".", exist_ok=True)
-    with open(meta_out, "w", encoding="utf-8") as f:
-        json.dump(points, f, ensure_ascii=False, indent=2)
+    save_json(meta_out, points)
 
     total = sum(len(r) for pd in all_results.values() for r in pd.values())
 

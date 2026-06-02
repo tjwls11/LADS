@@ -7,7 +7,7 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from utilities import _load_json
+from utilities import load_json
 from typing import Callable
 
 
@@ -494,7 +494,7 @@ def save_cookies(run_path_fn, role_sessions):
 
 # 역할별 인증 쿠키를 로드하여 반환
 def load_cookies(run_path_fn: Callable[[str], str]) -> dict[str, dict]:
-    all_cookies = _load_json(run_path_fn("auth_cookies_roles.json"), {})
+    all_cookies = load_json(run_path_fn("auth_cookies_roles.json"), {})
     role_cookies: dict[str, dict] = {"guest": {}}
     for role in ("member1", "admin"):
         cookies = all_cookies.get(role, {})
