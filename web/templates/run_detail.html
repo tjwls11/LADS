@@ -2,7 +2,7 @@
 {% block title %}LADS - 실행 상세 {{ run_id }}{% endblock %}
 
 {% block content %}
-<section class="flex min-h-[calc(100vh-80px)] flex-col gap-8">
+<section class="flex min-h-[calc(100vh-80px)] flex-col gap-6">
 
   {# ── 헤더 ── #}
   <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -10,10 +10,10 @@
       <div class="mb-2">
         <a class="text-[14px] font-bold text-slate-500 hover:text-slate-800" href="/runs">← 실행 이력</a>
       </div>
-      <h1 class="text-[28px] font-black leading-tight text-slate-950 font-mono">{{ run_id }}</h1>
+      <h1 class="text-[18px] font-black leading-tight text-slate-950 font-mono sm:text-[24px] md:text-[28px]">{{ run_id }}</h1>
       <p class="mt-1 text-[14px] text-slate-500">{{ ts }}</p>
     </div>
-    <div class="flex gap-2">
+    <div class="flex flex-wrap gap-2">
       <a href="/runs/{{ run_id }}/report.pdf"
          class="inline-flex h-10 items-center gap-2 rounded-sm border border-slate-200 bg-white px-4 text-[13px] font-extrabold text-slate-700 hover:bg-slate-50">
         <span class="material-symbols-outlined text-[18px]">download</span>
@@ -30,21 +30,21 @@
   </div>
 
   {# ── 파이프라인 상태 ── #}
-  <div class="rounded border border-surface-line bg-white p-6">
-    <h2 class="mb-4 text-[16px] font-black text-slate-950">파이프라인 완료 상태</h2>
-    <div class="grid grid-cols-2 gap-3 md:grid-cols-5">
+  <div class="rounded border border-surface-line bg-white p-5">
+    <h2 class="mb-4 text-[15px] font-black text-slate-950">파이프라인 완료 상태</h2>
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5">
       {% set steps = [
-        ('크롤링',     has_crawl,    'travel_explore'),
-        ('페이로드',   has_payload,  'psychology'),
-        ('주입 테스트 준비',  has_probe,     'radar'),
-        ('실행',       has_exec,     'terminal'),
-        ('취약점 판정',has_findings, 'analytics'),
+        ('크롤링',        has_crawl,    'travel_explore'),
+        ('페이로드',      has_payload,  'psychology'),
+        ('주입 테스트',   has_probe,    'radar'),
+        ('실행',          has_exec,     'terminal'),
+        ('취약점 판정',   has_findings, 'analytics'),
       ] %}
       {% for label, done, icon in steps %}
-      <div class="flex items-center gap-3 rounded border px-4 py-3 {% if done %}border-emerald-200 bg-emerald-50{% else %}border-slate-200 bg-slate-50{% endif %}">
-        <span class="material-symbols-outlined text-[20px] {% if done %}text-emerald-600{% else %}text-slate-400{% endif %}">{{ icon }}</span>
-        <div>
-          <div class="text-[13px] font-extrabold {% if done %}text-emerald-700{% else %}text-slate-500{% endif %}">{{ label }}</div>
+      <div class="flex items-center gap-3 rounded border px-3 py-3 {% if done %}border-emerald-200 bg-emerald-50{% else %}border-slate-200 bg-slate-50{% endif %}">
+        <span class="material-symbols-outlined text-[20px] shrink-0 {% if done %}text-emerald-600{% else %}text-slate-400{% endif %}">{{ icon }}</span>
+        <div class="min-w-0">
+          <div class="truncate text-[12px] font-extrabold {% if done %}text-emerald-700{% else %}text-slate-500{% endif %}">{{ label }}</div>
           <div class="font-mono text-[11px] {% if done %}text-emerald-600{% else %}text-slate-400{% endif %}">{% if done %}Done{% else %}—{% endif %}</div>
         </div>
       </div>
@@ -53,23 +53,23 @@
   </div>
 
   {# ── 요약 카드 ── #}
-  <div class="grid gap-5 md:grid-cols-2">
+  <div class="grid gap-4 md:grid-cols-2">
     {# 취약점 요약 #}
-    <div class="rounded border border-surface-line bg-white p-6">
-      <h2 class="mb-4 text-[16px] font-black text-slate-950">취약점 요약</h2>
+    <div class="rounded border border-surface-line bg-white p-5">
+      <h2 class="mb-4 text-[15px] font-black text-slate-950">취약점 요약</h2>
       {% if has_findings %}
-      <div class="grid grid-cols-3 gap-4">
-        <div class="rounded bg-surface-soft p-4 text-center">
-          <div class="text-[13px] font-bold text-slate-500">전체</div>
-          <div class="mt-2 text-[32px] font-black text-slate-950">{{ findings|length }}</div>
+      <div class="grid grid-cols-3 gap-3">
+        <div class="rounded bg-surface-soft p-3 text-center">
+          <div class="text-[12px] font-bold text-slate-500">전체</div>
+          <div class="mt-1 text-[26px] font-black tabular-nums text-slate-950">{{ findings|length }}</div>
         </div>
-        <div class="rounded bg-amber-50 p-4 text-center">
-          <div class="text-[13px] font-bold text-amber-700">XSS</div>
-          <div class="mt-2 text-[32px] font-black text-amber-700">{{ xss_cnt }}</div>
+        <div class="rounded bg-amber-50 p-3 text-center">
+          <div class="text-[12px] font-bold text-amber-700">XSS</div>
+          <div class="mt-1 text-[26px] font-black tabular-nums text-amber-700">{{ xss_cnt }}</div>
         </div>
-        <div class="rounded bg-red-50 p-4 text-center">
-          <div class="text-[13px] font-bold text-error">SQLi</div>
-          <div class="mt-2 text-[32px] font-black text-error">{{ sqli_cnt }}</div>
+        <div class="rounded bg-red-50 p-3 text-center">
+          <div class="text-[12px] font-bold text-error">SQLi</div>
+          <div class="mt-1 text-[26px] font-black tabular-nums text-error">{{ sqli_cnt }}</div>
         </div>
       </div>
       {% else %}
@@ -78,25 +78,25 @@
     </div>
 
     {# 실행 요약 #}
-    <div class="rounded border border-surface-line bg-white p-6">
-      <h2 class="mb-4 text-[16px] font-black text-slate-950">퍼징 실행 요약</h2>
+    <div class="rounded border border-surface-line bg-white p-5">
+      <h2 class="mb-4 text-[15px] font-black text-slate-950">퍼징 실행 요약</h2>
       {% if has_exec %}
-      <div class="grid grid-cols-4 gap-4">
-        <div class="rounded bg-surface-soft p-4 text-center">
-          <div class="text-[13px] font-bold text-slate-500">전체</div>
-          <div class="mt-2 text-[32px] font-black text-slate-950">{{ exec_total }}</div>
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div class="rounded bg-surface-soft p-3 text-center">
+          <div class="text-[12px] font-bold text-slate-500">전체</div>
+          <div class="mt-1 text-[22px] font-black tabular-nums text-slate-950">{{ exec_total }}</div>
         </div>
-        <div class="rounded bg-emerald-50 p-4 text-center">
-          <div class="text-[13px] font-bold text-emerald-700">성공</div>
-          <div class="mt-2 text-[32px] font-black text-emerald-700">{{ exec_ok }}</div>
+        <div class="rounded bg-emerald-50 p-3 text-center">
+          <div class="text-[12px] font-bold text-emerald-700">성공</div>
+          <div class="mt-1 text-[22px] font-black tabular-nums text-emerald-700">{{ exec_ok }}</div>
         </div>
-        <div class="rounded bg-amber-50 p-4 text-center">
-          <div class="text-[13px] font-bold text-amber-700">타임아웃</div>
-          <div class="mt-2 text-[32px] font-black text-amber-700">{{ exec_timeout }}</div>
+        <div class="rounded bg-amber-50 p-3 text-center">
+          <div class="text-[12px] font-bold text-amber-700">타임아웃</div>
+          <div class="mt-1 text-[22px] font-black tabular-nums text-amber-700">{{ exec_timeout }}</div>
         </div>
-        <div class="rounded bg-red-50 p-4 text-center">
-          <div class="text-[13px] font-bold text-error">오류</div>
-          <div class="mt-2 text-[32px] font-black text-error">{{ exec_err }}</div>
+        <div class="rounded bg-red-50 p-3 text-center">
+          <div class="text-[12px] font-bold text-error">오류</div>
+          <div class="mt-1 text-[22px] font-black tabular-nums text-error">{{ exec_err }}</div>
         </div>
       </div>
       {% else %}
@@ -105,91 +105,199 @@
     </div>
   </div>
 
-  {# ── 취약점 상세 목록 ── #}
+  {# ── 취약점 상세 목록 (토글 + 필터) ── #}
   {% if findings %}
-  <div class="flex min-h-0 flex-col overflow-hidden rounded border border-surface-line bg-white">
-    <div class="border-b border-surface-line bg-surface-soft px-6 py-4">
-      <h2 class="text-[18px] font-black text-slate-950">취약점 상세 목록</h2>
-    </div>
-    <div class="min-h-0 overflow-auto px-6 py-5">
-      <table class="w-full min-w-[1000px] border-separate border-spacing-0 text-left text-[14px]">
-        <thead>
-          <tr class="text-[13px] font-bold text-slate-500">
-            <th class="border-b border-surface-line px-3 pb-3">유형</th>
-            <th class="border-b border-surface-line px-3 pb-3">URL</th>
-            <th class="border-b border-surface-line px-3 pb-3">파라미터</th>
-            <th class="border-b border-surface-line px-3 pb-3">페이로드</th>
-            <th class="border-b border-surface-line px-3 pb-3">상태</th>
-            <th class="border-b border-surface-line px-3 pb-3">근거</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for f in findings %}
-          <tr class="hover:bg-slate-50">
-            <td class="border-b border-slate-100 px-3 py-3">
-              <span class="rounded px-2 py-1 font-mono text-[12px] font-extrabold
-                {% if 'xss' in (f.vuln_type or '')|lower %}bg-amber-100 text-amber-800
-                {% elif 'sql' in (f.vuln_type or '')|lower %}bg-red-100 text-red-800
-                {% else %}bg-slate-100 text-slate-700{% endif %}">
-                {{ f.vuln_type or '-' }}
-              </span>
-            </td>
-            <td class="max-w-[260px] truncate border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-600" title="{{ f.url }}">{{ f.url or f.point }}</td>
-            <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] font-bold">{{ f.param or '-' }}</td>
-            <td class="max-w-[320px] truncate border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-700" title="{{ f.payload }}">{{ f.payload }}</td>
-            <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px]">{{ f.status or '-' }}</td>
-            <td class="max-w-[300px] truncate border-b border-slate-100 px-3 py-3 text-[13px] text-slate-600" title="{{ f.evidence }}">{{ f.evidence }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+  <div class="overflow-hidden rounded border border-surface-line bg-white">
+    {# 헤더 (클릭 토글) #}
+    <button type="button" onclick="toggleSection('findings-body', 'findings-icon')"
+            class="flex w-full items-center justify-between border-b border-surface-line bg-surface-soft px-6 py-4 text-left hover:bg-slate-100">
+      <h2 class="text-[16px] font-black text-slate-950">
+        취약점 상세 목록
+        <span class="ml-2 rounded bg-slate-200 px-2 py-0.5 font-mono text-[12px] font-bold text-slate-600">{{ findings|length }}</span>
+      </h2>
+      <span id="findings-icon" class="material-symbols-outlined text-[20px] text-slate-400 transition-transform duration-200">expand_more</span>
+    </button>
+
+    <div id="findings-body">
+      {# 필터 버튼 #}
+      <div class="flex flex-wrap gap-2 border-b border-surface-line px-6 py-3">
+        <button onclick="filterFindings('all')"   id="ff-all"   class="detail-filter-btn active">전체 ({{ findings|length }})</button>
+        {% if xss_cnt > 0 %}
+        <button onclick="filterFindings('xss')"   id="ff-xss"   class="detail-filter-btn">XSS ({{ xss_cnt }})</button>
+        {% endif %}
+        {% if sqli_cnt > 0 %}
+        <button onclick="filterFindings('sqli')"  id="ff-sqli"  class="detail-filter-btn">SQLi ({{ sqli_cnt }})</button>
+        {% endif %}
+        {% if bac_cnt > 0 %}
+        <button onclick="filterFindings('bac')"   id="ff-bac"   class="detail-filter-btn">BAC ({{ bac_cnt }})</button>
+        {% endif %}
+        {% if misconfig_cnt > 0 %}
+        <button onclick="filterFindings('misconfig')" id="ff-misconfig" class="detail-filter-btn">Misconfig ({{ misconfig_cnt }})</button>
+        {% endif %}
+      </div>
+
+      <div class="overflow-auto px-6 py-4">
+        <table class="w-full min-w-[900px] border-separate border-spacing-0 text-left text-[13px]" id="findings-table">
+          <thead>
+            <tr class="text-[12px] font-bold text-slate-500">
+              <th class="border-b border-surface-line px-3 pb-2 whitespace-nowrap">유형</th>
+              <th class="border-b border-surface-line px-3 pb-2">URL</th>
+              <th class="border-b border-surface-line px-3 pb-2 whitespace-nowrap">파라미터</th>
+              <th class="border-b border-surface-line px-3 pb-2">페이로드</th>
+              <th class="border-b border-surface-line px-3 pb-2 whitespace-nowrap">상태</th>
+              <th class="border-b border-surface-line px-3 pb-2">근거</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for f in findings %}
+            {% set mod = f.module or f.vuln_type or '' %}
+            <tr class="finding-row hover:bg-slate-50" data-module="{{ mod|lower }}">
+              <td class="border-b border-slate-100 px-3 py-2.5 whitespace-nowrap">
+                <span class="rounded px-2 py-1 font-mono text-[11px] font-extrabold
+                  {% if 'xss' in mod|lower %}bg-amber-100 text-amber-800
+                  {% elif 'sql' in mod|lower %}bg-red-100 text-red-800
+                  {% elif 'bac' in mod|lower %}bg-purple-100 text-purple-800
+                  {% elif 'misconfig' in mod|lower %}bg-blue-100 text-blue-800
+                  {% else %}bg-slate-100 text-slate-700{% endif %}">
+                  {{ mod or '-' }}
+                </span>
+              </td>
+              <td class="max-w-[220px] truncate border-b border-slate-100 px-3 py-2.5 font-mono text-[11px] text-slate-600" title="{{ f.url }}">{{ f.url or f.point }}</td>
+              <td class="border-b border-slate-100 px-3 py-2.5 font-mono text-[11px] font-bold whitespace-nowrap">{{ f.param or '-' }}</td>
+              <td class="max-w-[280px] truncate border-b border-slate-100 px-3 py-2.5 font-mono text-[11px] text-slate-700" title="{{ f.payload }}">{{ f.payload or '-' }}</td>
+              <td class="border-b border-slate-100 px-3 py-2.5 font-mono text-[11px] whitespace-nowrap">{{ f.status or '-' }}</td>
+              <td class="max-w-[280px] truncate border-b border-slate-100 px-3 py-2.5 text-[12px] text-slate-600" title="{{ f.evidence }}">{{ f.evidence }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
   {% endif %}
 
-  {# ── 실행 상세 목록 ── #}
+  {# ── 퍼징 실행 상세 (토글 + 필터) ── #}
   {% if exec_results %}
-  <div class="flex min-h-0 flex-col overflow-hidden rounded border border-surface-line bg-white">
-    <div class="border-b border-surface-line bg-surface-soft px-6 py-4">
-      <h2 class="text-[18px] font-black text-slate-950">퍼징 실행 상세</h2>
-    </div>
-    <div class="min-h-0 overflow-auto px-6 py-5">
-      <table class="w-full min-w-[1100px] border-separate border-spacing-0 text-left text-[14px]">
-        <thead>
-          <tr class="text-[13px] font-bold text-slate-500">
-            <th class="border-b border-surface-line px-3 pb-3">ID</th>
-            <th class="border-b border-surface-line px-3 pb-3">포인트</th>
-            <th class="border-b border-surface-line px-3 pb-3">파라미터</th>
-            <th class="border-b border-surface-line px-3 pb-3">위치</th>
-            <th class="border-b border-surface-line px-3 pb-3">유형</th>
-            <th class="border-b border-surface-line px-3 pb-3">페이로드</th>
-            <th class="border-b border-surface-line px-3 pb-3">상태</th>
-            <th class="border-b border-surface-line px-3 pb-3">응답시간</th>
-            <th class="border-b border-surface-line px-3 pb-3">오류</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in exec_results %}
-          <tr class="hover:bg-slate-50 {% if r.error %}bg-red-50{% endif %}">
-            <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-400">{{ r.id }}</td>
-            <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px]">{{ r.point }}</td>
-            <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] font-bold">{{ r.inject_param or '-' }}</td>
-            <td class="border-b border-slate-100 px-3 py-3 text-[13px]">{{ r.inject_location or '-' }}</td>
-            <td class="border-b border-slate-100 px-3 py-3">
-              {% set vt = (r.meta or {}).get('vuln_type', '') if r.meta else '' %}
-              {% if vt %}<span class="rounded bg-slate-100 px-2 py-1 font-mono text-[11px]">{{ vt }}</span>{% else %}-{% endif %}
-            </td>
-            <td class="max-w-[320px] truncate border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-700" title="{{ r.payload }}">{{ r.payload }}</td>
-            <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px]">{{ r.status or '-' }}</td>
-            <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px]">{% if r.elapsed %}{{ "%.3f"|format(r.elapsed) }}s{% else %}-{% endif %}</td>
-            <td class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-error">{{ r.error or '' }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+  <div class="overflow-hidden rounded border border-surface-line bg-white">
+    {# 헤더 (클릭 토글, 기본 접힘) #}
+    <button type="button" onclick="toggleSection('exec-body', 'exec-icon')"
+            class="flex w-full items-center justify-between border-b border-surface-line bg-surface-soft px-6 py-4 text-left hover:bg-slate-100">
+      <h2 class="text-[16px] font-black text-slate-950">
+        퍼징 실행 상세
+        <span class="ml-2 rounded bg-slate-200 px-2 py-0.5 font-mono text-[12px] font-bold text-slate-600">{{ exec_total }}</span>
+      </h2>
+      <span id="exec-icon" class="material-symbols-outlined text-[20px] text-slate-400 transition-transform duration-200 rotate-180">expand_more</span>
+    </button>
+
+    <div id="exec-body" class="hidden">
+      {# 필터 버튼 #}
+      <div class="flex flex-wrap gap-2 border-b border-surface-line px-6 py-3">
+        <button onclick="filterExec('all')"     id="ef-all"     class="detail-filter-btn active">전체 ({{ exec_total }})</button>
+        <button onclick="filterExec('ok')"      id="ef-ok"      class="detail-filter-btn">성공 ({{ exec_ok }})</button>
+        {% if exec_timeout > 0 %}
+        <button onclick="filterExec('timeout')" id="ef-timeout" class="detail-filter-btn">타임아웃 ({{ exec_timeout }})</button>
+        {% endif %}
+        {% if exec_err > 0 %}
+        <button onclick="filterExec('error')"   id="ef-error"   class="detail-filter-btn">오류 ({{ exec_err }})</button>
+        {% endif %}
+      </div>
+
+      <div class="overflow-auto px-6 py-4">
+        <table class="w-full min-w-[1000px] border-separate border-spacing-0 text-left text-[13px]" id="exec-table">
+          <thead>
+            <tr class="text-[12px] font-bold text-slate-500">
+              <th class="border-b border-surface-line px-3 pb-2 whitespace-nowrap">포인트</th>
+              <th class="border-b border-surface-line px-3 pb-2 whitespace-nowrap">파라미터</th>
+              <th class="border-b border-surface-line px-3 pb-2 whitespace-nowrap">유형</th>
+              <th class="border-b border-surface-line px-3 pb-2">페이로드</th>
+              <th class="border-b border-surface-line px-3 pb-2 whitespace-nowrap">상태</th>
+              <th class="border-b border-surface-line px-3 pb-2 whitespace-nowrap">응답시간</th>
+              <th class="border-b border-surface-line px-3 pb-2 whitespace-nowrap">결과</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in exec_results %}
+            {% set has_err = r.error and r.error != '' %}
+            {% set is_timeout = r.error == 'timeout' %}
+            <tr class="exec-row hover:bg-slate-50 {% if has_err %}bg-red-50{% endif %}"
+                data-status="{% if is_timeout %}timeout{% elif has_err %}error{% else %}ok{% endif %}">
+              <td class="max-w-[200px] truncate border-b border-slate-100 px-3 py-2.5 font-mono text-[11px]" title="{{ r.point }}">{{ r.point }}</td>
+              <td class="border-b border-slate-100 px-3 py-2.5 font-mono text-[11px] font-bold whitespace-nowrap">{{ r.inject_param or '-' }}</td>
+              <td class="border-b border-slate-100 px-3 py-2.5 whitespace-nowrap">
+                {% set vt = (r.meta or {}).get('vuln_type', '') if r.meta else '' %}
+                {% if vt %}<span class="rounded bg-slate-100 px-2 py-0.5 font-mono text-[11px]">{{ vt }}</span>{% else %}-{% endif %}
+              </td>
+              <td class="max-w-[280px] truncate border-b border-slate-100 px-3 py-2.5 font-mono text-[11px] text-slate-700" title="{{ r.payload }}">{{ r.payload }}</td>
+              <td class="border-b border-slate-100 px-3 py-2.5 font-mono text-[11px] whitespace-nowrap">{{ r.status or '-' }}</td>
+              <td class="border-b border-slate-100 px-3 py-2.5 font-mono text-[11px] whitespace-nowrap">{% if r.elapsed %}{{ "%.2f"|format(r.elapsed) }}s{% else %}-{% endif %}</td>
+              <td class="border-b border-slate-100 px-3 py-2.5 whitespace-nowrap">
+                {% if is_timeout %}
+                <span class="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-700">timeout</span>
+                {% elif has_err %}
+                <span class="rounded bg-red-100 px-2 py-0.5 font-mono text-[11px] font-bold text-error">{{ r.error }}</span>
+                {% else %}
+                <span class="rounded bg-emerald-100 px-2 py-0.5 text-[11px] font-bold text-emerald-700">ok</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
   {% endif %}
 
 </section>
+{% endblock %}
+
+{% block scripts %}
+<style>
+  .detail-filter-btn {
+    padding: 5px 12px;
+    border-radius: 4px;
+    border: 1px solid #d6dbe3;
+    background: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    color: #475569;
+    cursor: pointer;
+    transition: background .12s, color .12s;
+  }
+  .detail-filter-btn:hover { background: #f1f5f9; }
+  .detail-filter-btn.active {
+    background: #1e293b;
+    color: #fff;
+    border-color: #1e293b;
+  }
+</style>
+<script>
+  function toggleSection(bodyId, iconId) {
+    var body = document.getElementById(bodyId);
+    var icon = document.getElementById(iconId);
+    if (!body) return;
+    var hidden = body.classList.toggle('hidden');
+    if (icon) icon.style.transform = hidden ? 'rotate(180deg)' : '';
+  }
+
+  function filterFindings(mode) {
+    document.querySelectorAll('.finding-row').forEach(function(row) {
+      var mod = row.dataset.module || '';
+      row.style.display = (mode === 'all' || mod.indexOf(mode) !== -1) ? '' : 'none';
+    });
+    document.querySelectorAll('[id^="ff-"]').forEach(function(btn) { btn.classList.remove('active'); });
+    var active = document.getElementById('ff-' + mode);
+    if (active) active.classList.add('active');
+  }
+
+  function filterExec(mode) {
+    document.querySelectorAll('.exec-row').forEach(function(row) {
+      var s = row.dataset.status;
+      row.style.display = (mode === 'all' || s === mode) ? '' : 'none';
+    });
+    document.querySelectorAll('[id^="ef-"]').forEach(function(btn) { btn.classList.remove('active'); });
+    var active = document.getElementById('ef-' + mode);
+    if (active) active.classList.add('active');
+  }
+</script>
 {% endblock %}

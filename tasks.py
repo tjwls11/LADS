@@ -221,11 +221,17 @@ def _task_validate(run_path_fn, emit_progress=None):
 
 def _task_misconfig(run_path_fn, target_url, emit_progress=None):
     from misconfig.checker import run as misconfig_run
+    from findings import load_findings, save_findings
 
     def _prog(n):
         if emit_progress: emit_progress(n)
 
     findings_file = run_path_fn("findings.json")
+
+    # 재실행 시 기존 misconfig 결과만 제거하고 xss/sqli 결과는 유지
+    existing = load_findings(findings_file)
+    non_misconfig = [f for f in existing if f.get("module") != "misconfig"]
+    save_findings(non_misconfig, findings_file)
 
     print(f"[MISCONFIG] target: {target_url}")
     findings = misconfig_run(
@@ -240,40 +246,18 @@ def _task_misconfig(run_path_fn, target_url, emit_progress=None):
     _prog(100)
 
 
-def _task_bac_vertical(run_path_fn, target_url=None, emit_progress=None):
-    from bac.vertical import run_vertical_probe
-
-    def _prog(n):
-        if emit_progress: emit_progress(n)
-
-    crawl_file = run_path_fn("crawl_result.json")
-    if not os.path.exists(crawl_file):
-        print(f"[BAC] missing crawl result file: {crawl_file}")
-        return
-
-    if target_url:
-        from crawl.auth import login_all_roles
-        print("[BAC] refreshing session cookies before vertical probe")
-        role_sessions = login_all_roles(base_url=target_url)
-        for role, cookies in role_sessions.items():
-            with open(run_path_fn(f"auth_cookies_{role}.json"), "w", encoding="utf-8") as f:
-                json.dump(cookies, f, ensure_ascii=False, indent=2)
-
-    results = run_vertical_probe(
-        run_path_fn,
-        progress_callback=lambda done, total: _prog(int(done / max(total, 1) * 100)),
-    )
-    print(f"[BAC] vertical done: {len(results)} results")
-    _prog(100)
-
-
-def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_crawl=False, emit_progress=None):
+def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_crawl=False, resume=False, emit_progress=None):
     def _prog(n):
         if emit_progress: emit_progress(n)
 
     _prog(2)
 
-    if skip_crawl:
+    # ── 크롤링 ──
+    crawl_done = os.path.exists(run_path_fn("crawl_result.json")) and os.path.exists(run_path_fn("targets.json"))
+    if resume and crawl_done:
+        print("[CRAWL] 이전 크롤링 결과 재사용 (resume)")
+        _prog(20)
+    elif skip_crawl:
         print("[CRAWL] 이전 크롤링 결과 재사용")
         _prog(20)
     else:
@@ -284,7 +268,17 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
         print("[ERROR] 크롤링 결과 파일 없음 — 스캔 중단")
         return
 
-    if os.path.exists(payloads_file):
+    # ── 페이로드 ──
+    payload_done = os.path.exists(payloads_file)
+    if resume and payload_done:
+        try:
+            with open(payloads_file, encoding="utf-8") as _f:
+                _cnt = len(json.load(_f))
+        except Exception:
+            _cnt = 0
+        print(f"[PAYLOAD] 기존 페이로드 재사용 (resume, {_cnt}개)")
+        _prog(30)
+    elif payload_done:
         try:
             with open(payloads_file, encoding="utf-8") as _f:
                 _cnt = len(json.load(_f))
@@ -300,23 +294,46 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
         print("[ERROR] 페이로드 파일 없음 — 스캔 중단")
         return
 
-    _task_probe(run_path_fn, payloads_file, payloads_meta_file, emit_progress)
-    _prog(35)
+    # ── 주입 테스트 준비 ──
+    probe_done = os.path.exists(run_path_fn("probe_tasks.json"))
+    if resume and probe_done:
+        print("[PROBE] 기존 주입 테스트 작업 재사용 (resume)")
+        _prog(35)
+    else:
+        _task_probe(run_path_fn, payloads_file, payloads_meta_file, emit_progress)
+        _prog(35)
 
     if not os.path.exists(run_path_fn("probe_tasks.json")):
         print("[ERROR] 퍼징 작업 파일 없음 — 스캔 중단")
         return
 
-    _task_execute(run_path_fn, emit_progress)
-    _prog(90)
+    # ── 실행 ──
+    exec_done = os.path.exists(run_path_fn("execution_results.json"))
+    if resume and exec_done:
+        print("[EXEC] 기존 실행 결과 재사용 (resume)")
+        _prog(90)
+    else:
+        _task_execute(run_path_fn, emit_progress)
+        _prog(90)
 
     if not os.path.exists(run_path_fn("execution_results.json")):
         print("[ERROR] 실행 결과 파일 없음 — 스캔 중단")
         return
 
-    _task_validate(run_path_fn, emit_progress)
-    _prog(95)
+    # ── 취약점 판정 ──
+    from findings import load_findings
+    findings_done = any(
+        f.get("module") != "misconfig"
+        for f in load_findings(run_path_fn("findings.json"))
+    )
+    if resume and findings_done:
+        print("[VALIDATE] 기존 취약점 판정 결과 재사용 (resume)")
+        _prog(95)
+    else:
+        _task_validate(run_path_fn, emit_progress)
+        _prog(95)
 
+    # ── misconfig (항상 재실행) ──
     _task_misconfig(run_path_fn, target_url, emit_progress)
     _prog(100)
 
