@@ -3,15 +3,16 @@ import os
 from typing import Callable
 from urllib.parse import urlparse
 from dataclasses import asdict
+
 from crawl.auth import make_login, load_cookies, save_cookies
 from crawl.crawler import Crawler
 from crawl.target_builder import build_targets
+from payload.generator import run as generate_run
 from probe.strategy import build_tasks
 from probe.executor import execute
-from bac.vertical import run_vertical_probe
-from payload.generator import run as generate_run
 from analyzer import validate as analyze_results
 from findings import load_findings, save_findings
+from bac.vertical import run_vertical_probe
 from misconfig.checker import run as misconfig_run
 
 TASK_LABELS = {
@@ -320,7 +321,7 @@ def _task_validate(run_path_fn, emit_progress=None):
         results = json.load(f)
 
     def _validate_progress(done, total):
-        _prog(emit_progress, 90 + int(done / max(total, 1) * 10))
+        _prog(emit_progress, 90 + int(done / max(total, 1) * 5))
 
     findings = analyze_results(results, progress_callback=_validate_progress)
     save_findings(findings, findings_file)
@@ -381,7 +382,7 @@ def _task_main_stream(run_path_fn, target_url, payloads_file, payloads_meta_file
         except Exception:
             _cnt = 0
         print(f"[PAYLOAD] 기존 페이로드 재사용 (resume, {_cnt}개)")
-        _prog(30)
+        _prog(emit_progress, 30)
     elif payload_done:
         try:
             with open(payloads_file, encoding="utf-8") as _f:
@@ -433,11 +434,8 @@ def _task_main_stream(run_path_fn, target_url, payloads_file, payloads_meta_file
         print("[VALIDATE] 기존 취약점 판정 결과 재사용 (resume)")
         _prog(emit_progress, 95)
     else:
-        _task_validate(run_path_fn, 
-                       emit_progress=lambda pct: _prog(emit_progress, 85 + int((pct - 90) * 10 / 10)),)
+        _task_validate(run_path_fn, emit_progress)
 
     # 설정 오류 점검(misconfig) - 항상 재실행
-    _task_misconfig(run_path_fn,
-                    target_url,
-                    emit_progress=lambda pct: _prog(emit_progress, 95 + int(pct * 5 / 100)),)
+    _task_misconfig(run_path_fn, target_url, emit_progress)
     _prog(emit_progress, 100)
