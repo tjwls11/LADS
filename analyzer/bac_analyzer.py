@@ -21,11 +21,18 @@ _LOGIN_TEXT_HINTS = [
     "세션이 만료", "재로그인",
 ]
 
+_LOGIN_JS_REDIRECT_RE = re.compile(
+    r"(?:document\.location|location\.replace|location\.href)\s*[=(]['\"]([^'\"]*login[^'\"]*)['\"]",
+    re.IGNORECASE,
+)
+
 
 def is_login_page(body: str) -> bool:
     if not body:
         return False
     if any(p.search(body) for p in _LOGIN_FORM_PATTERNS):
+        return True
+    if _LOGIN_JS_REDIRECT_RE.search(body):
         return True
     body_lower = body.lower()
     return sum(1 for h in _LOGIN_TEXT_HINTS if h.lower() in body_lower) >= 2
@@ -39,6 +46,12 @@ _ERROR_PATTERNS = [
     re.compile(r'unauthorized', re.IGNORECASE),
     re.compile(r'관리자만\s*(?:접근|이용)', re.IGNORECASE),
     re.compile(r'잘못된\s*접근', re.IGNORECASE),
+    # Gnuboard JS alert 차단 패턴 (alert + window.close / history.back)
+    # 내부 괄호 포함 매칭: alert("포인트(0)..."); history.back()
+    re.compile(
+        r'alert\s*\((?:[^)(]|\([^)]*\))*\)\s*;\s*(?:window\.close|history\.back)',
+        re.IGNORECASE | re.DOTALL,
+    ),
 ]
 
 
@@ -129,7 +142,7 @@ def validate_bac(test_result: dict) -> tuple[bool, str]:
     # 1단계: Forced Browsing
     if is_sensitive_path(url):
         if status == 200 and size >= MIN_VULN_BODY_SIZE:
-            if not is_error_page(body, status):
+            if not is_login_page(body) and not is_error_page(body, status):
                 return True, f"[VULNERABLE] forced_browsing — 민감 경로 '{url}' 노출 (size={size})"
 
     # 2단계: 수직적 권한 상승
@@ -144,7 +157,7 @@ def validate_bac(test_result: dict) -> tuple[bool, str]:
     if size < MIN_VULN_BODY_SIZE:
         return False, f"안전함 (빈 응답 size={size})"
 
-    if role in ("guest", "member", "user"):
+    if role in ("guest", "member", "member1", "user"):
         return True, f"[VULNERABLE] vertical_escalation — '{role}' 권한으로 '{url}' 접근 성공 (size={size})"
 
     return False, "안전함 (role 정보 없음, 그룹 분석 대기)"
@@ -174,11 +187,11 @@ def detect_bac_group(results: list[dict]) -> list[dict]:
             by_role[_get_role(r)] = r
 
         admin      = by_role.get("admin")
-        member     = by_role.get("member") or by_role.get("user")
+        member1     = by_role.get("member1") or by_role.get("member") or by_role.get("user")
         guest      = by_role.get("guest") or by_role.get("unknown")
         admin_data = _extract(admin) if admin else None
 
-        for low_role_name, low_resp in [("member", member), ("guest", guest)]:
+        for low_role_name, low_resp in [("member1", member1), ("guest", guest)]:
             if not low_resp:
                 continue
 
