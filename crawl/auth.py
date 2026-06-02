@@ -1,13 +1,19 @@
 import os
 import sys
+import json
 from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import urljoin
-
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from utilities import _load_json
+from typing import Callable
 
+
+# =====
+# 환경 변수 / 상수
+# =====
 load_dotenv()
 
 # 로그인 관련 환경 변수
@@ -44,7 +50,6 @@ LOGIN_LINK_HINTS = (
 )
 
 
-
 @dataclass
 class LoginAssessment: 
     # 로그인 시도 후 판정된 결과 담는 구조체. 외부 반환은 bool, cookies로 유지.
@@ -53,6 +58,7 @@ class LoginAssessment:
     signals: dict = field(default_factory=dict)
 
 
+# 요청 세션 생성
 def _make_session() -> requests.Session:
     session = requests.Session()
     session.headers.update({
@@ -67,6 +73,9 @@ def _make_session() -> requests.Session:
     return session
 
 
+# =====
+# 로그인 필드 추론
+# =====
 def extract_hidden_inputs(form_tag) -> dict:
     hidden = {}
     if not form_tag:
@@ -136,6 +145,10 @@ def find_login_form(soup):
     return None
 
 
+
+# =====
+# 로그인 상태 판단
+# =====
 # 비로그인 사용자에게 보이는 로그인 링크 탐지
 def _has_login_link(soup) -> bool:
     for link in soup.find_all("a", href=True):
@@ -225,6 +238,10 @@ def _assess_login(signals: dict) -> LoginAssessment:
     return LoginAssessment("unknown", "no clear success or failure evidence", signals)
 
 
+
+# =====
+# 로그인 URL 탐색
+# =====
 # 범용 CMS 로그인 경로 사용해 로그인 URL 탐색
 def _candidate_login_urls(base_url: str) -> list[str]:
     base = base_url.rstrip("/") + "/"
@@ -319,6 +336,9 @@ def ensure_login_url(base_url: str, timeout: int = _TIMEOUT) -> str:
     return discovered
 
 
+# =====
+# 로그인 수행
+# =====
 def login(
     session: requests.Session,
     url: str = LOGIN_URL,
@@ -404,8 +424,8 @@ def login(
     return False, {}
 
 
-# 역할별 세션 쿠키 반환
-def login_all_roles(
+# 역할별 세션 쿠키 반환 (새로 로그인해 쿠키 획득)
+def make_login(
     url: str = LOGIN_URL,
     method: str = LOGIN_METHOD,
     fail_indicator: str = LOGIN_FAIL_INDICATOR,
@@ -413,6 +433,7 @@ def login_all_roles(
     timeout: int = _TIMEOUT,
     roles: tuple[str, ...] | None = None,
 ) -> dict[str, dict]:
+    
     requested_roles = roles or ("guest", "member1", "member2", "admin")
     role_sessions: dict[str, dict] = {}
 
@@ -460,3 +481,26 @@ def login_all_roles(
             print("[AUTH - FAIL] admin login 실패; 스킵.", file=sys.stderr)
 
     return role_sessions
+
+
+# =====
+# 쿠키 저장 / 로드
+# =====
+# 역할별 인증 쿠키를 저장
+def save_cookies(run_path_fn, role_sessions):
+    with open(run_path_fn("auth_cookies_roles.json"), "w", encoding="utf-8") as f:
+        json.dump(role_sessions, f, ensure_ascii=False, indent=2)
+
+
+# 역할별 인증 쿠키를 로드하여 반환
+def load_cookies(run_path_fn: Callable[[str], str]) -> dict[str, dict]:
+    all_cookies = _load_json(run_path_fn("auth_cookies_roles.json"), {})
+    role_cookies: dict[str, dict] = {"guest": {}}
+    for role in ("member1", "admin"):
+        cookies = all_cookies.get(role, {})
+        if role == "member1" and not cookies:
+            cookies = all_cookies.get("member", {})
+        if cookies:
+            role_cookies[role] = cookies
+    return role_cookies
+

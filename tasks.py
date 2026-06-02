@@ -1,18 +1,19 @@
 import json
 import os
+from typing import Callable
 from urllib.parse import urlparse
 from dataclasses import asdict
-from crawl.auth import login_all_roles
+from crawl.auth import make_login, load_cookies, save_cookies
 from crawl.crawler import Crawler
 from crawl.target_builder import build_targets
 from probe.strategy import build_tasks
+from probe.executor import execute
 from bac.vertical import run_vertical_probe
 from payload.generator import run as generate_run
 from analyzer import validate as analyze_results
 from findings import save_findings
-from probe.executor import execute
 from misconfig.checker import run as misconfig_run
-
+from utilities import _load_json
 
 TASK_LABELS = {
     "crawl":    "크롤링 및 타깃 구성",
@@ -28,7 +29,6 @@ TASK_LABELS = {
 def _prog(emit_progress, n):
     if emit_progress:
         emit_progress(n)
-
 
 # 역할별 크롤 결과를 URL 기준으로 병합하고 accessible_by(어떤 역할에서 접근 가능한지) 태깅
 def _merge_crawl_results(role_pages: dict[str, list[dict]]) -> list[dict]:
@@ -69,15 +69,14 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     targets_file = run_path_fn("targets.json")
 
     # 역할별 세션 쿠키 획득
-    role_sessions = login_all_roles(
+    role_sessions = make_login(
         base_url=target_url,
         roles=("guest", "member1"),
     )
     acquired = [r for r in role_sessions if role_sessions[r] or r == "guest"]
     print(f"[CRAWL] 현재 로그인 세션: {acquired}")
 
-    with open(run_path_fn("auth_cookies_roles.json"), "w", encoding="utf-8") as f:
-        json.dump(role_sessions, f, ensure_ascii=False, indent=2)
+    save_cookies(run_path_fn, role_sessions)
 
     # 역할별 크롤 실행
     role_pages: dict[str, list[dict]] = {}
@@ -145,12 +144,9 @@ def _task_probe(run_path_fn, payloads_file, emit_progress=None):
     with open(targets_file, encoding="utf-8") as f:
         targets = json.load(f)
 
-    base_cookie: dict = {}
-    roles_file = run_path_fn("auth_cookies_roles.json")
-    if os.path.exists(roles_file):
-        with open(roles_file, encoding="utf-8") as f:
-            saved_roles = json.load(f)
-            base_cookie = saved_roles.get("member1") or saved_roles.get("member") or {}
+    role_cookies = load_cookies(run_path_fn)
+    base_cookie: dict = role_cookies.get("member1") or {}
+    if base_cookie:
         print(f"[PROBE] 일반 유저 로그인됨")
     else:
         print("[PROBE] 인증 파일 없음. 인증없이 진행")
@@ -192,9 +188,9 @@ def _task_bac_vertical(run_path_fn, target_url=None, emit_progress=None):
         return
 
     if target_url:
-        from crawl.auth import login_all_roles
+        from crawl.auth import make_login
         print("[BAC] refreshing session cookies before vertical probe")
-        refreshed = login_all_roles(
+        refreshed = make_login(
             base_url=target_url,
             roles=("guest", "member1", "admin"),
         )
@@ -229,7 +225,7 @@ def _task_bac_crawl(run_path_fn, target_url, emit_progress=None):
     crawl_file   = run_path_fn("crawl_result.json")
     targets_file = run_path_fn("targets.json")
 
-    role_sessions = login_all_roles(
+    role_sessions = make_login(
         base_url=target_url,
         roles=("guest", "member1", "admin"),
     )
@@ -237,8 +233,7 @@ def _task_bac_crawl(run_path_fn, target_url, emit_progress=None):
     print(f"[BAC CRAWL] 세션: {acquired}")
 
     os.makedirs(os.path.dirname(crawl_file) or ".", exist_ok=True)
-    with open(run_path_fn("auth_cookies_roles.json"), "w", encoding="utf-8") as f:
-        json.dump(role_sessions, f, ensure_ascii=False, indent=2)
+    save_cookies(run_path_fn, role_sessions)
 
     role_pages: dict[str, list[dict]] = {}
     n_roles = max(len(role_sessions), 1)

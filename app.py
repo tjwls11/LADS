@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 from datetime import datetime
+from utilities import _load_json
 
 
 _DEPS = {
@@ -135,7 +136,7 @@ def _run_dir(run_id: str) -> str:
 
 def _infer_run_type(run_id: str) -> str:
     run_dir = _run_dir(run_id)
-    meta = _load_json_or(os.path.join(run_dir, "run_meta.json"), {})
+    meta = _load_json(os.path.join(run_dir, "run_meta.json"), {})
     run_type = meta.get("run_type")
     if run_type in {"main", "bac"}:
         return run_type
@@ -198,15 +199,6 @@ def _init_run() -> None:
 def _run_path(filename: str, run_id: str | None = None) -> str:
     return os.path.join(RUNS_DIR, run_id or _current_run_id or "default", filename)
 
-
-def _load_json_or(path: str, default):
-    if not os.path.exists(path):
-        return default
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return default
 
 
 def _active_url() -> str:
@@ -535,7 +527,7 @@ def findings_page():
         except Exception as exc:
             return f"결과 파일 읽기 오류: {exc}", 500
 
-    findings.extend(_load_json_or(bac_findings_file, []))
+    findings.extend(_load_json(bac_findings_file, []))
 
     xss_cnt       = sum(1 for f in findings if f.get("module") == "xss")
     sqli_cnt      = sum(1 for f in findings if f.get("module") == "sqli")
@@ -741,7 +733,7 @@ def run_detail(run_id):
         except Exception:
             pass
     if "bac_findings.json" in files:
-        findings.extend(_load_json_or(os.path.join(run_dir, "bac_findings.json"), []))
+        findings.extend(_load_json(os.path.join(run_dir, "bac_findings.json"), []))
     xss_cnt = sum(1 for fi in findings if fi.get("module") == "xss")
     sqli_cnt = sum(1 for fi in findings if fi.get("module") == "sqli")
     bac_cnt = sum(1 for fi in findings if fi.get("module") == "bac")
@@ -754,7 +746,7 @@ def run_detail(run_id):
         except Exception:
             pass
     if "bac_vertical_results.json" in files:
-        exec_results.extend(_load_json_or(os.path.join(run_dir, "bac_vertical_results.json"), []))
+        exec_results.extend(_load_json(os.path.join(run_dir, "bac_vertical_results.json"), []))
     exec_ok = sum(1 for r in exec_results if r.get("error") is None)
     exec_timeout = sum(1 for r in exec_results if r.get("error") == "timeout")
     exec_err = sum(1 for r in exec_results if r.get("error") and r.get("error") != "timeout")
