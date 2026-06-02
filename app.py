@@ -6,8 +6,21 @@ import subprocess
 import sys
 import threading
 from datetime import datetime
-from utilities import _load_json
 
+from utilities import _load_json
+from dotenv import load_dotenv
+from flask import Flask, Response, redirect, render_template, request
+from tasks import (
+    _task_crawl as _crawl_impl,
+    _task_payload as _payload_impl,
+    _task_probe as _probe_impl,
+    _task_execute as _execute_impl,
+    _task_validate as _validate_impl,
+    _task_misconfig as _misconfig_impl,
+    _task_bac_stream as _bac_impl,
+    _task_main_stream as _all_impl,
+    TASK_LABELS as _TASK_LABELS,
+)
 
 _DEPS = {
     "flask": "flask",
@@ -26,20 +39,6 @@ for _pkg, _mod in _DEPS.items():
         subprocess.check_call([sys.executable, "-m", "pip", "install", _pkg, "-q"])
 del _pkg, _mod
 
-from dotenv import load_dotenv
-from flask import Flask, Response, redirect, render_template, request
-from tasks import (
-    _task_crawl as _crawl_impl,
-    _task_payload as _payload_impl,
-    _task_probe as _probe_impl,
-    _task_execute as _execute_impl,
-    _task_validate as _validate_impl,
-    _task_misconfig as _misconfig_impl,
-    _task_bac as _bac_impl,
-    _task_all as _all_impl,
-    TASK_LABELS as _TASK_LABELS,
-)
-
 load_dotenv()
 
 
@@ -47,7 +46,6 @@ TARGETS_CONFIG_FILE = "targets_config.json"
 PAYLOADS_FILE = os.getenv("PAYLOADS_FILE", "results/payloads_llm.json")
 PAYLOADS_META_FILE = os.getenv("PAYLOADS_META_FILE", "results/payloads_llm_meta.json")
 RUNS_DIR = "runs"
-
 
 def _load_targets() -> list[dict]:
     if os.path.exists(TARGETS_CONFIG_FILE):
@@ -120,8 +118,43 @@ app = Flask(__name__, template_folder='web/templates', static_folder='web/static
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 app.jinja_env.auto_reload = True
-_task_lock = threading.Lock()
+_task_lock    = threading.Lock()
 _thread_local = threading.local()
+_running_task: str | None = None
+
+# ── 브로드캐스트 로그 버퍼 ──────────────────────────────────────
+_log_lock        = threading.Lock()
+_log_buffer:     list[str] = []       # 최근 500줄 보관
+_log_subscribers: list[queue.Queue] = []
+_LOG_BUF_MAX = 500
+
+def _broadcast(msg: str) -> None:
+    with _log_lock:
+        _log_buffer.append(msg)
+        if len(_log_buffer) > _LOG_BUF_MAX:
+            _log_buffer.pop(0)
+        for sub in _log_subscribers:
+            try:
+                sub.put_nowait(msg)
+            except queue.Full:
+                pass
+
+def _subscribe() -> queue.Queue:
+    """새 SSE 클라이언트 등록 + 버퍼 기존 로그 전달."""
+    q: queue.Queue = queue.Queue(maxsize=2000)
+    with _log_lock:
+        for msg in _log_buffer:
+            try:
+                q.put_nowait(msg)
+            except queue.Full:
+                break
+        _log_subscribers.append(q)
+    return q
+
+def _unsubscribe(q: queue.Queue) -> None:
+    with _log_lock:
+        if q in _log_subscribers:
+            _log_subscribers.remove(q)
 
 
 
@@ -207,9 +240,7 @@ def _active_url() -> str:
 
 
 def _emit_progress(pct: int) -> None:
-    q = getattr(_thread_local, "log_queue", None)
-    if q is not None:
-        q.put(f"__PROGRESS__{max(0, min(100, int(pct)))}")
+    _broadcast(f"__PROGRESS__{max(0, min(100, int(pct)))}")
 
 
 class _RoutingStream:
@@ -217,11 +248,10 @@ class _RoutingStream:
         self._orig = original
 
     def write(self, text):
-        q = getattr(_thread_local, "log_queue", None)
-        if q is not None:
+        if _running_task is not None:
             stripped = text.rstrip("\n")
             if stripped:
-                q.put(stripped)
+                _broadcast(stripped)
         else:
             self._orig.write(text)
 
@@ -260,13 +290,11 @@ def _task_misconfig():
     _misconfig_impl(_run_path, _active_url(), _emit_progress)
 
 
-def _task_all(skip_crawl: bool = False):
-    _all_impl(_run_path, _active_url(), PAYLOADS_FILE, skip_crawl=skip_crawl, emit_progress=_emit_progress)
-
+def _task_all(skip_crawl: bool = False, resume: bool = False):
+    _all_impl(_run_path, _active_url(), PAYLOADS_FILE, PAYLOADS_META_FILE, skip_crawl=skip_crawl, resume= resume, emit_progress=_emit_progress)
 
 def _task_bac():
     _bac_impl(_run_path, _active_url(), _emit_progress)
-
 
 _TASK_FUNCS = {
     "crawl":    _task_crawl,
@@ -286,57 +314,79 @@ def stream_task(task):
         return "알 수 없는 태스크", 404
 
     skip_crawl = request.args.get("skip_crawl") == "1"
-    q = queue.Queue()
+    resume     = request.args.get("resume") == "1"
+
+    # 이미 실행 중이면 태스크를 새로 시작하지 않고 기존 브로드캐스트에 구독만
+    already_running = _running_task is not None
 
     global _current_run_id
-    if task == "all" and skip_crawl:
-        latest_main_run = _latest_run_id("main")
-        if latest_main_run:
-            _current_run_id = latest_main_run
-        else:
-            _current_run_id = _create_run("main")
-            skip_crawl = False
-    elif task == "all":
-        _current_run_id = _create_run("main")
-    elif task == "bac":
-        _current_run_id = _create_run("bac")
-
-    def run_in_thread():
-        acquired = _task_lock.acquire(blocking=False)
-        if not acquired:
-            q.put("[WARN] 다른 태스크가 실행 중입니다.")
-            q.put(None)
-            return
-        _thread_local.log_queue = q
-        try:
-            if task == "all":
-                _task_all(skip_crawl=skip_crawl)
+    if not already_running:
+        if task == "all" and resume:
+            current_main = _current_run_id if _current_run_id and _infer_run_type(_current_run_id) == "main" else None
+            resume_run = current_main or _latest_run_id("main")
+            if resume_run:
+                _current_run_id = resume_run
             else:
-                _TASK_FUNCS[task]()
-        except Exception as exc:
-            q.put(f"[ERROR] {type(exc).__name__}: {exc}")
-        finally:
-            _thread_local.log_queue = None
-            _task_lock.release()
-            q.put(None)
+                _current_run_id = _create_run("main")
+                resume = False
+        elif task == "all" and skip_crawl:
+            latest_main_run = _latest_run_id("main")
+            if latest_main_run:
+                _current_run_id = latest_main_run
+            else:
+                _current_run_id = _create_run("main")
+                skip_crawl = False
+        elif task == "all":
+            _current_run_id = _create_run("main")
+        elif task == "bac":
+            _current_run_id = _create_run("bac")
+            
+        with _log_lock:
+            _log_buffer.clear()
 
-    threading.Thread(target=run_in_thread, daemon=True).start()
+        def run_in_thread():
+            global _running_task
+            acquired = _task_lock.acquire(blocking=False)
+            if not acquired:
+                _broadcast("__SYSTEM__ [WARN] 다른 태스크가 실행 중입니다.")
+                _broadcast("__DONE__")
+                return
+            _running_task = task
+            label = _TASK_LABELS.get(task, task)
+            _broadcast(f"[{label}] 시작")
+            try:
+                if task == "all":
+                    _task_all(skip_crawl=skip_crawl, resume=resume)
+                else:
+                    _TASK_FUNCS[task]()
+            except Exception as exc:
+                _broadcast(f"[ERROR] {type(exc).__name__}: {exc}")
+            finally:
+                _running_task = None
+                _task_lock.release()
+                _broadcast(f"[{label}] 완료")
+                _broadcast("__DONE__")
+
+        threading.Thread(target=run_in_thread, daemon=True).start()
+
+    # 구독 시작 (실행 중이면 버퍼 로그 + 이후 로그 수신)
+    sub = _subscribe()
 
     def generate():
-        label = _TASK_LABELS.get(task, task)
-        yield f"data: [{label}] 시작\n\n"
-        while True:
-            try:
-                msg = q.get(timeout=2)
-            except queue.Empty:
-                yield ": keepalive\n\n"
-                continue
-            if msg is None:
-                yield f"data: [{label}] 완료\n\n"
-                yield "data: __DONE__\n\n"
-                break
-            safe = msg.replace("\n", " ")
-            yield f"data: {safe}\n\n"
+        try:
+            while True:
+                try:
+                    msg = sub.get(timeout=2)
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+                    continue
+                if msg == "__DONE__":
+                    yield "data: __DONE__\n\n"
+                    break
+                safe = msg.replace("\n", " ")
+                yield f"data: {safe}\n\n"
+        finally:
+            _unsubscribe(sub)
 
     return Response(generate(), mimetype="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -547,7 +597,6 @@ def findings_page():
                 r["_evidence"] = hit.get("evidence", "") if hit else ""
                 r["_vuln_type"] = hit.get("module", "") if hit else (r.get("meta") or {}).get("vuln_type", "")
             all_results = exec_results
-            safe_cnt = sum(1 for r in all_results if not r.get("_vulnerable") and not r.get("error"))
         except Exception:
             pass
 
@@ -570,16 +619,19 @@ def findings_page():
     for mf in findings:
         if mf.get("module") != "misconfig":
             continue
+        is_confirmed = mf.get("type") == "MISCONFIG_CONFIRMED"
         all_results.append({
-            "_vulnerable": True,
-            "_evidence":   mf.get("evidence", ""),
-            "_vuln_type":  "misconfig",
-            "url":         mf.get("url", ""),
-            "method":      "GET",
+            "_vulnerable":  is_confirmed,
+            "_warning":     not is_confirmed,
+            "_evidence":    mf.get("evidence", ""),
+            "_vuln_type":   mf.get("type", "misconfig"),
+            "_extra":       mf.get("extra") or {},
+            "url":          mf.get("url", ""),
+            "method":       "GET",
             "inject_param": None,
-            "payload":     "",
-            "status":      mf.get("status"),
-            "error":       None,
+            "payload":      "",
+            "status":       mf.get("status"),
+            "error":        None,
         })
 
     safe_cnt = sum(1 for r in all_results if not r.get("_vulnerable") and not r.get("error"))
@@ -699,6 +751,16 @@ def settings_page():
     return redirect("/targets")
 
 
+@app.route("/api/status")
+def api_status():
+    from flask import jsonify
+    return jsonify({
+        "running": _running_task is not None,
+        "task":    _running_task or "",
+        "run_id":  _current_run_id or "",
+    })
+
+
 @app.route("/runs")
 def runs_page():
     return render_template("runs.html", runs=_list_runs(), current_run=_current_run_id)
@@ -725,11 +787,15 @@ def run_detail(run_id):
     files = set(os.listdir(run_dir))
     run_type = _infer_run_type(run_id)
 
-    findings, xss_cnt, sqli_cnt, bac_cnt = [], 0, 0, 0
+    findings, xss_cnt, sqli_cnt, bac_cnt, misconfig_cnt = [], 0, 0, 0, 0
     if "findings.json" in files:
         try:
             with open(os.path.join(run_dir, "findings.json"), encoding="utf-8") as f:
                 findings = json.load(f)
+            xss_cnt      = sum(1 for fi in findings if fi.get("module") == "xss")
+            sqli_cnt     = sum(1 for fi in findings if fi.get("module") == "sqli")
+            bac_cnt      = sum(1 for fi in findings if fi.get("module") == "bac")
+            misconfig_cnt = sum(1 for fi in findings if fi.get("module") == "misconfig")
         except Exception:
             pass
     if "bac_findings.json" in files:
@@ -743,6 +809,9 @@ def run_detail(run_id):
         try:
             with open(os.path.join(run_dir, "execution_results.json"), encoding="utf-8") as f:
                 exec_results = json.load(f)
+            exec_ok      = sum(1 for r in exec_results if r.get("error") is None)
+            exec_timeout = sum(1 for r in exec_results if r.get("error") == "timeout")
+            exec_err     = sum(1 for r in exec_results if r.get("error") and r.get("error") != "timeout")
         except Exception:
             pass
     if "bac_vertical_results.json" in files:
@@ -767,6 +836,7 @@ def run_detail(run_id):
         xss_cnt=xss_cnt,
         sqli_cnt=sqli_cnt,
         bac_cnt=bac_cnt,
+        misconfig_cnt=misconfig_cnt,
         exec_results=exec_results,
         exec_total=len(exec_results),
         exec_ok=exec_ok,

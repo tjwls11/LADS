@@ -3,7 +3,7 @@ block content %}
 <section class="flex min-h-[calc(100vh-80px)] flex-col gap-8">
   <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
     <div>
-      <h1 class="text-[30px] font-black leading-tight text-slate-950">
+      <h1 class="text-[22px] font-black leading-tight text-slate-950 sm:text-[30px]">
         취약점 상세 진단 결과
       </h1>
       <p class="mt-2 font-mono text-[13px] text-slate-500">
@@ -28,7 +28,7 @@ block content %}
   {% else %}
 
   <div
-    class="grid gap-5 {% if all_results %}md:grid-cols-6{% else %}md:grid-cols-5{% endif %}"
+    class="grid grid-cols-2 gap-3 sm:gap-4 sm:gap-5 {% if all_results %}sm:grid-cols-3 md:grid-cols-6{% else %}sm:grid-cols-3 md:grid-cols-5{% endif %}"
   >
     <div class="rounded border border-surface-line bg-white p-6">
       <span class="block text-[15px] font-bold text-slate-600">위험 탐지</span>
@@ -47,6 +47,12 @@ block content %}
       <span class="block text-[15px] font-bold text-slate-600">SQLi</span>
       <strong class="mt-3 block text-[36px] font-black leading-none text-error"
         >{{ sqli_cnt }}</strong
+      >
+    </div>
+    <div class="rounded border border-surface-line bg-white p-6">
+      <span class="block text-[15px] font-bold text-slate-600">BAC</span>
+      <strong class="mt-3 block text-[36px] font-black leading-none text-purple-600"
+        >{{ bac_cnt }}</strong
       >
     </div>
     <div class="rounded border border-surface-line bg-white p-6">
@@ -73,7 +79,8 @@ block content %}
   </div>
 
   {% if all_results %}
-  <div class="flex gap-2">
+  {% set warning_cnt = all_results | selectattr('_warning') | list | length %}
+  <div class="flex flex-wrap gap-2">
     <button
       onclick="filterTable('all')"
       id="btn-all"
@@ -88,6 +95,15 @@ block content %}
     >
       위험 ({{ findings|length }})
     </button>
+    {% if warning_cnt > 0 %}
+    <button
+      onclick="filterTable('warning')"
+      id="btn-warning"
+      class="filter-btn rounded-sm border border-surface-line bg-white px-4 py-2 text-[13px] font-extrabold text-slate-700 hover:bg-amber-50 hover:text-amber-700 hover:border-amber-200"
+    >
+      경고 ({{ warning_cnt }})
+    </button>
+    {% endif %}
     <button
       onclick="filterTable('safe')"
       id="btn-safe"
@@ -124,8 +140,11 @@ block content %}
         </thead>
         <tbody>
           {% if all_results %} {% for r in all_results %}
+          {% set cves = r._extra.cves if r._extra and r._extra.cves else [] %}
+          {% set row_id = 'row-' + loop.index|string %}
           <tr
-            class="hover:bg-slate-50 result-row {% if r._vulnerable %}row-danger{% elif r.error %}row-error{% else %}row-safe{% endif %}"
+            class="hover:bg-slate-50 result-row {% if r._vulnerable %}row-danger{% elif r._warning %}row-warning{% elif r.error %}row-error{% else %}row-safe{% endif %} {% if cves %}cursor-pointer{% endif %}"
+            {% if cves %}onclick="toggleCve('{{ row_id }}')"{% endif %}
           >
             <td class="border-b border-slate-100 px-3 py-3 whitespace-nowrap">
               {% if r._vulnerable %}
@@ -133,6 +152,12 @@ block content %}
                 class="inline-flex items-center gap-2 font-extrabold text-error whitespace-nowrap"
               >
                 <span class="h-2 w-2 rounded-full bg-error"></span>위험
+              </span>
+              {% elif r._warning %}
+              <span
+                class="inline-flex items-center gap-2 font-extrabold text-amber-600 whitespace-nowrap"
+              >
+                <span class="h-2 w-2 rounded-full bg-amber-400"></span>경고
               </span>
               {% elif r.error %}
               <span
@@ -151,7 +176,7 @@ block content %}
             <td class="border-b border-slate-100 px-3 py-3">
               {% if r._vuln_type %}
               <span
-                class="rounded px-2 py-1 font-mono text-[12px] {% if 'xss' in r._vuln_type|lower %}bg-amber-100 text-amber-800 {% elif 'sql' in r._vuln_type|lower %}bg-red-100 text-red-800 {% elif 'bac' in r._vuln_type|lower %}bg-orange-100 text-orange-800 {% elif 'misconfig' in r._vuln_type|lower %}bg-blue-100 text-blue-800 {% else %}bg-slate-100 text-slate-700{% endif %}"
+                class="rounded px-2 py-1 font-mono text-[12px] {% if 'xss' in r._vuln_type|lower %}bg-amber-100 text-amber-800 {% elif 'sql' in r._vuln_type|lower %}bg-red-100 text-red-800 {% elif 'bac' in r._vuln_type|lower %}bg-purple-100 text-purple-800 {% elif 'misconfig' in r._vuln_type|lower %}bg-blue-100 text-blue-800 {% else %}bg-slate-100 text-slate-700{% endif %}"
               >
                 {{ r._vuln_type }}
               </span>
@@ -180,12 +205,57 @@ block content %}
               {{ r.status or '-' }}
             </td>
             <td
-              class="max-w-[380px] truncate border-b border-slate-100 px-3 py-3 text-slate-600"
-              title="{{ r._evidence }}"
+              class="border-b border-slate-100 px-3 py-3 text-slate-600"
             >
-              {{ r._evidence or '' }}
+              <div class="max-w-[340px] truncate" title="{{ r._evidence }}">{{ r._evidence or '' }}</div>
+              {% if cves %}
+              <span class="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-blue-500">
+                <span class="material-symbols-outlined text-[13px]">expand_more</span>
+                CVE {{ cves|length }}건
+              </span>
+              {% endif %}
             </td>
           </tr>
+          {% if cves %}
+          <tr id="{{ row_id }}" class="cve-detail hidden result-row {% if r._vulnerable %}row-danger{% elif r._warning %}row-warning{% else %}row-safe{% endif %}">
+            <td colspan="7" class="border-b border-slate-100 bg-slate-50 px-6 py-4">
+              <div class="text-[12px] font-bold text-slate-500 mb-2">
+                CVE 목록 — {{ r._extra.header }}: {{ r._extra.value }}
+              </div>
+              <table class="w-full border-separate border-spacing-0 text-[12px]">
+                <thead>
+                  <tr class="text-[11px] font-bold text-slate-400">
+                    <th class="pb-1 pr-4 text-left whitespace-nowrap">CVE ID</th>
+                    <th class="pb-1 pr-4 text-left whitespace-nowrap">Severity</th>
+                    <th class="pb-1 pr-4 text-left whitespace-nowrap">Score</th>
+                    <th class="pb-1 text-left">설명</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for cve in cves %}
+                  <tr>
+                    <td class="py-1 pr-4 font-mono font-bold whitespace-nowrap">
+                      <a href="https://nvd.nist.gov/vuln/detail/{{ cve.id }}" target="_blank"
+                         class="text-blue-600 hover:underline">{{ cve.id }}</a>
+                    </td>
+                    <td class="py-1 pr-4 whitespace-nowrap">
+                      <span class="rounded px-2 py-0.5 font-bold
+                        {% if cve.severity == 'CRITICAL' %}bg-red-100 text-red-700
+                        {% elif cve.severity == 'HIGH' %}bg-orange-100 text-orange-700
+                        {% elif cve.severity == 'MEDIUM' %}bg-yellow-100 text-yellow-700
+                        {% else %}bg-slate-100 text-slate-600{% endif %}">
+                        {{ cve.severity }}
+                      </span>
+                    </td>
+                    <td class="py-1 pr-4 font-mono whitespace-nowrap">{{ cve.score or '-' }}</td>
+                    <td class="py-1 text-slate-600 max-w-[500px]">{{ cve.description or '-' }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </td>
+          </tr>
+          {% endif %}
           {% endfor %} {% else %} {% for f in findings %}
           <tr class="hover:bg-slate-50">
             <td class="border-b border-slate-100 px-3 py-3 whitespace-nowrap">
@@ -198,7 +268,7 @@ block content %}
             <td class="border-b border-slate-100 px-3 py-3">
               {% set display_type = f.module or '' %}
               <span
-                class="rounded px-2 py-1 font-mono text-[12px] {% if 'xss' in display_type|lower %}bg-amber-100 text-amber-800 {% elif 'sql' in display_type|lower %}bg-red-100 text-red-800 {% elif 'bac' in display_type|lower %}bg-orange-100 text-orange-800 {% elif 'misconfig' in display_type|lower %}bg-blue-100 text-blue-800 {% else %}bg-slate-100 text-slate-700{% endif %}"
+                class="rounded px-2 py-1 font-mono text-[12px] {% if 'xss' in display_type|lower %}bg-amber-100 text-amber-800 {% elif 'sql' in display_type|lower %}bg-red-100 text-red-800 {% elif display_type|lower == 'bac' %}bg-purple-100 text-purple-800 {% elif 'misconfig' in display_type|lower %}bg-blue-100 text-blue-800 {% else %}bg-slate-100 text-slate-700{% endif %}"
               >
                 {{ display_type or '-' }}
               </span>
@@ -260,6 +330,8 @@ block content %}
         row.style.display = ''
       } else if (mode === 'danger') {
         row.style.display = row.classList.contains('row-danger') ? '' : 'none'
+      } else if (mode === 'warning') {
+        row.style.display = row.classList.contains('row-warning') ? '' : 'none'
       } else if (mode === 'safe') {
         row.style.display = row.classList.contains('row-safe') ? '' : 'none'
       }
@@ -274,6 +346,14 @@ block content %}
       active.className =
         'filter-btn rounded-sm border border-slate-800 bg-slate-800 px-4 py-2 text-[13px] font-extrabold text-white'
     }
+  }
+
+  function toggleCve(rowId) {
+    var el = document.getElementById(rowId)
+    if (!el) return
+    el.classList.toggle('hidden')
+    var icon = el.previousElementSibling && el.previousElementSibling.querySelector('.material-symbols-outlined')
+    if (icon) icon.textContent = el.classList.contains('hidden') ? 'expand_more' : 'expand_less'
   }
 
   document.addEventListener('click', function (e) {
