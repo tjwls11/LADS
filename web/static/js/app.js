@@ -25,7 +25,6 @@ var _labels = {
   execute:   '활성 스캔',
   validate:  '결과 분석',
   misconfig: '설정 오류 점검',
-  bac:       'BAC 진단',
   all:       '전체 진단'
 };
 
@@ -83,9 +82,6 @@ function _stageFromMessage(message) {
   }
   if (text.indexOf('[misconfig]') !== -1 || text.indexOf('설정 오류') !== -1) {
     return { label: 'MISCONFIG',cls: 'bg-blue-100 text-blue-800',    row: 'bg-blue-50' };
-  }
-  if (text.indexOf('[bac]') !== -1 || text.indexOf('vertical') !== -1 || text.indexOf('권한 상승') !== -1) {
-    return { label: 'BAC',      cls: 'bg-orange-100 text-orange-800', row: 'bg-orange-50' };
   }
   return { label: 'SYSTEM', cls: 'bg-slate-100 text-slate-700', row: '' };
 }

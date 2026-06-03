@@ -5,101 +5,152 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
+# 직접 실행(python generate_payloads.py) 시 LADS 루트를 경로에 추가
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from .llm_client import LLMClient
-    from .prompt_builder import SYSTEM_PROMPT, build_mutation_prompt
-    from .parser import parse as parse_llm
-    from .baseline import sqli as baseline_sqli
-    from .baseline import xss as baseline_xss
-    from .point_builder import build_points_from_targets
+    from .context_builder import SYSTEM_PROMPT, build_prompt
+    from .parser import clean as parse_clean
 except ImportError:
     from llm_client import LLMClient
-    from prompt_builder import SYSTEM_PROMPT, build_mutation_prompt
-    from parser import parse as parse_llm
-    from baseline import sqli as baseline_sqli
-    from baseline import xss as baseline_xss
-    from point_builder import build_points_from_targets
+    from context_builder import SYSTEM_PROMPT, build_prompt
+    from parser import clean as parse_clean
 
-from payload.filter import filter_payloads, deduplicate
+from payload.filter import filter_payloads, deduplicate, report as filter_report
 
 
-COUNT = 3
-BASELINE_LIMIT = 4
 
+INPUT_POINTS = [
 
-def _sample_diverse(payloads: list[dict], limit: int) -> list[dict]:
-    """타입별 round-robin 샘플링 — 단순 슬라이싱으로 생기는 단일 타입 편중 방지."""
-    from collections import defaultdict
-    by_type: dict[str, list[dict]] = defaultdict(list)
-    for p in payloads:
-        by_type[p.get("type", "unknown")].append(p)
+    # XSS 타겟
+    {
+        "name":    "xss_wr_subject",
+        "url":     "http://34.68.27.120:8081/bbs/write_update.php",
+        "method":  "POST",
+        "param":   "wr_subject",
+        "type":    "stored_xss",
+        "note":    "게시글 제목 - 홈/상세/관리자 3곳 반영, script 차단",
+        "vuln_types": ["xss_subject"],
+        "base_params": {"w": "w", "bo_table": "free", "wr_content": "", "html": "1"},
+    },
+    {
+        "name":    "xss_wr_content",
+        "url":     "http://34.68.27.120:8081/bbs/write_update.php",
+        "method":  "POST",
+        "param":   "wr_content",
+        "type":    "stored_xss",
+        "note":    "게시글 본문 - img/a/b/p 허용, script 차단, 이벤트핸들러 우회 필요",
+        "vuln_types": ["xss_content"],
+        "base_params": {"w": "w", "bo_table": "free", "wr_subject": "test", "html": "1"},
+    },
+    {
+        "name":    "xss_search_stx",
+        "url":     "http://34.68.27.120:8081/bbs/search.php",
+        "method":  "GET",
+        "param":   "stx",
+        "type":    "reflected_xss",
+        "note":    "검색창 stx - value='' 속성 반영, onfocus=alert(1)→onfocusalert1 필터",
+        "vuln_types": ["xss_search"],
+        "base_params": {"sfl": "wr_subject", "sop": "and"},
+    },
+    {
+        "name":    "xss_qalist_stx",
+        "url":     "http://34.68.27.120:8081/bbs/board.php",
+        "method":  "GET",
+        "param":   "stx",
+        "type":    "reflected_xss",
+        "note":    "Q&A 게시판 검색창 - board.php?bo_table=qa, search.php와 동일 stx 패턴",
+        "vuln_types": ["xss_search"],
+        "base_params": {"sfl": "wr_subject", "sop": "and"},
+    },
+    {
+        "name":    "xss_comment",
+        "url":     "http://34.68.27.120:8081/bbs/write_comment_update.php",
+        "method":  "POST",
+        "param":   "wr_content",
+        "type":    "stored_xss",
+        "note":    "댓글 본문 - http:// URL만 <a href> 변환, javascript: 차단",
+        "vuln_types": ["xss_comment"],
+        "base_params": {"bo_table": "free", "wr_id": "1", "w": ""},
+    },
 
-    result: list[dict] = []
-    groups = list(by_type.values())
-    i = 0
-    while len(result) < limit and any(groups):
-        g = groups[i % len(groups)]
-        if g:
-            result.append(g.pop(0))
-        i += 1
-    return result
+    # SQLi 타겟
+    {
+        "name":    "sqli_search_sfl",
+        "url":     "http://34.68.27.120:8081/bbs/search.php",
+        "method":  "GET",
+        "param":   "sfl",
+        "type":    "string",
+        "db":      "MySQL",
+        "note":    "검색 필드 선택자 - SQL WHERE {sfl} LIKE '...' 직접 연결",
+        "vuln_types": ["sqli_field"],
+        "base_params": {"stx": "test", "sop": "and"},
+    },
+    {
+        "name":    "sqli_search_sst",
+        "url":     "http://34.68.27.120:8081/bbs/search.php",
+        "method":  "GET",
+        "param":   "sst",
+        "type":    "string",
+        "db":      "MySQL",
+        "note":    "정렬 컬럼 - ORDER BY {sst} 직접 연결, intval 없음",
+        "vuln_types": ["sqli_orderby"],
+        "base_params": {"stx": "test", "sfl": "wr_subject", "sop": "and"},
+    },
+    {
+        "name":    "sqli_search_stx",
+        "url":     "http://34.68.27.120:8081/bbs/search.php",
+        "method":  "GET",
+        "param":   "stx",
+        "type":    "string",
+        "db":      "MySQL",
+        "note":    "검색 키워드 - INSTR(LOWER(col),LOWER(stx)) 컨텍스트, PHP 공백분리 → 페이로드 공백금지, a'))))...# 패턴",
+        "vuln_types": ["sqli_string"],
+        "base_params": {"sfl": "wr_subject", "sop": "and"},
+    },
+    {
+        "name":    "sqli_login_mb_id",
+        "url":     "http://34.68.27.120:8081/bbs/login_check.php",
+        "method":  "POST",
+        "param":   "mb_id",
+        "type":    "string",
+        "db":      "MySQL",
+        "note":    "로그인 아이디 - 문자열 컨텍스트, 인증 우회 목표",
+        "vuln_types": ["sqli_login"],
+        "base_params": {"mb_password": "test", "url": "/"},
+    },
+    {
+        "name":    "sqli_qalist_sfl",
+        "url":     "http://34.68.27.120:8081/bbs/board.php",
+        "method":  "GET",
+        "param":   "sfl",
+        "type":    "string",
+        "db":      "MySQL",
+        "note":    "Q&A 게시판 검색 필드 선택자 - board.php?bo_table=qa, search.php sfl과 동일 패턴",
+        "vuln_types": ["sqli_field"],
+        "base_params": {"stx": "test", "sop": "and"},
+    },
+]
 
+COUNT = 7  # 타입당 페이로드 수
 
-def _select_baseline_payloads(point: dict, vuln_type: str) -> list[dict]:
-    vt = (vuln_type or "").lower()
-    value_shape = (point.get("value_shape") or "").lower()
-    field_type  = (point.get("field_type")  or "").lower()
-    location    = (point.get("location")    or "").lower()
+def run(out_file: str = "results/payloads_llm.json", targets_file: str = None, progress_callback=None):  # 로딩바 콜백 함수
+    # targets_file: 크롤링 결과(targets.json) 경로. 현재는 INPUT_POINTS 고정 사용이라
+    #               받기만 하고 사용하지 않음 (호출부 호환성 유지 / 추후 동적 생성 연동 대비)
+    
+    print(f"\n{'='*60}")
+    print(f"  Gnuboard5 Payload Generator v2")
+    print(f"  Target: http://34.68.27.120:8081/")
+    print(f"{'='*60}\n")
 
-    if vt == "sqli_login":
-        payloads = baseline_sqli.get_by_sql_context("auth", "HIGH")
-    elif vt == "sqli_field":
-        payloads = baseline_sqli.get_by_sql_context("field_selector", "HIGH")
-    elif vt == "sqli_orderby":
-        payloads = baseline_sqli.get_by_sql_context("orderby", "HIGH")
-    elif vt.startswith("sqli_"):
-        if value_shape == "number_like":
-            payloads = baseline_sqli.get_by_context("numeric", "HIGH")
-        else:
-            payloads = baseline_sqli.get_by_context("string", "HIGH")
-    elif vt == "xss_search":
-        if field_type == "textarea":
-            payloads = baseline_xss.get_by_context("body", "HIGH")
-        else:
-            payloads = baseline_xss.get_by_context("attr_value", "HIGH")
-    elif vt in {"xss_subject", "xss_content", "xss_comment"}:
-        if field_type == "textarea":
-            payloads = baseline_xss.get_by_context("body", "HIGH")
-        else:
-            payloads = baseline_xss.get_by_context("stored", "HIGH")
-    elif vt.startswith("xss_"):
-        if location in ("header", "cookie"):
-            payloads = baseline_xss.get_by_context("filter_bypass", "HIGH")
-        elif field_type == "textarea":
-            payloads = baseline_xss.get_by_context("body", "HIGH")
-        else:
-            payloads = baseline_xss.get_by_context("reflected", "HIGH")
-    else:
-        payloads = []
+    client = LLMClient()
+    all_results = {}
+    total_points = len(INPUT_POINTS)
 
-    return _sample_diverse(payloads, BASELINE_LIMIT)
-
-
-def generate_payloads(
-    points: list[dict],
-    client: LLMClient,
-    progress_callback=None,
-) -> dict:
-    all_results: dict = {}
-    total_points = len(points)
-    # (group_key, vuln_type) → 동일 파라미터 그룹의 LLM 결과 재사용
-    payload_cache: dict[tuple[str, str], list[dict]] = {}
-
-    for idx, point in enumerate(points):
+    for idx, point in enumerate(INPUT_POINTS):
         pname = point["name"]
-        if progress_callback:
+        if progress_callback:  # 로딩바 콜백 함수
             progress_callback(idx, total_points)
         print(f"\n[INPUT POINT] {pname}")
         print(f"  {point['method']} {point['url']} | param={point['param']}")
@@ -109,28 +160,17 @@ def generate_payloads(
         all_results[pname] = {}
 
         for vtype in point["vuln_types"]:
-            cache_key = (point.get("group_key") or pname, vtype)
-            if cache_key in payload_cache:
-                records = payload_cache[cache_key]
-                all_results[pname][vtype] = records
-                print(f"  [{vtype}] reused group payloads ({len(records)} payloads)")
-                continue
-
-            print(f"  [{vtype}] generating group payloads...", end=" ", flush=True)
+            print(f"  [{vtype}] generating...", end=" ", flush=True)
             try:
-                baseline_payloads = _select_baseline_payloads(point, vtype)
-                if not baseline_payloads:
-                    payload_cache[cache_key] = []
-                    all_results[pname][vtype] = []
-                    print("skipped: no baseline")
-                    continue
-
-                prompt = build_mutation_prompt(point, vtype, baseline_payloads, count=COUNT)
-                raw = client.generate(prompt=prompt, system=SYSTEM_PROMPT, temperature=0.7)
-                parsed = parse_llm(raw)
-                filtered, rejected = filter_payloads(parsed)
-                records = deduplicate(filtered)
-                payload_cache[cache_key] = records
+                prompt  = build_prompt(point, vtype, count=COUNT)
+                raw     = client.generate(
+                    prompt=prompt,
+                    system=SYSTEM_PROMPT,
+                    temperature=0.7,
+                )
+                parsed          = parse_clean(raw)           # 파싱 + 중복 제거
+                filtered, rejected = filter_payloads(parsed) # 품질 필터링
+                records         = deduplicate(filtered)       # 최종 중복 제거
                 all_results[pname][vtype] = records
                 print(f"{len(records)} payloads (제거: {len(rejected)}개)")
                 for r in records:
@@ -141,42 +181,24 @@ def generate_payloads(
 
         print()
 
-    return all_results
-
-
-def run(out_file: str = "results/payloads_llm.json", progress_callback=None, targets_file: str | None = None):
-
-    print(f"\n{'='*60}")
-    print(f"  Payload Generator")
-    print(f"{'='*60}\n")
-
-    if not targets_file or not os.path.exists(targets_file):
-        print(f"[ERROR] targets_file 없음: {targets_file}")
-        print("[ERROR] 크롤링을 먼저 실행하세요.")
-        return
-
-    with open(targets_file, encoding="utf-8") as f:
-        targets_data = json.load(f)
-
-    points = build_points_from_targets(targets_data)
-    if not points:
-        print("[ERROR] injectable 파라미터 없음 — targets.json을 확인하세요.")
-        return
-
-    print(f"  입력점: {len(points)}개 (targets.json 기반)\n")
-
-    all_results = generate_payloads(points, LLMClient(), progress_callback)
-
+    # 저장
     os.makedirs(os.path.dirname(out_file) or ".", exist_ok=True)
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
 
-    meta_out = (out_file[:-5] if out_file.endswith(".json") else out_file) + "_meta.json"
+    # Step 7에서 사용할 입력 지점 메타 저장
+    meta_out = os.getenv("PAYLOADS_META_FILE", "results/payloads_llm_meta.json")
     os.makedirs(os.path.dirname(meta_out) or ".", exist_ok=True)
     with open(meta_out, "w", encoding="utf-8") as f:
-        json.dump(points, f, ensure_ascii=False, indent=2)
+        json.dump(INPUT_POINTS, f, ensure_ascii=False, indent=2)
 
-    total = sum(len(r) for pd in all_results.values() for r in pd.values())
+    all_records = [
+        r
+        for point_data in all_results.values()
+        for records in point_data.values()
+        for r in records
+    ]
+    total = len(all_records)
 
     print(f"{'='*60}")
     print(f"  저장 완료 -> {out_file}")
@@ -187,6 +209,5 @@ def run(out_file: str = "results/payloads_llm.json", progress_callback=None, tar
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default="results/payloads_llm.json")
-    parser.add_argument("--targets", default=None)
     args = parser.parse_args()
-    run(args.out, targets_file=args.targets)
+    run(args.out)

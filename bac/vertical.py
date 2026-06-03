@@ -6,23 +6,15 @@ import os
 import re
 from typing import Callable
 from urllib.parse import urlparse
-from utilities import _load_json
-from crawl.auth import load_cookies
+
 from probe.executor import execute
 
 
-ROLE_ORDER = ("guest", "member1", "admin")
+ROLE_ORDER = ("guest", "member", "admin")
 TASKS_FILE = "bac_vertical_tasks.json"
 RESULTS_FILE = "bac_vertical_results.json"
 
-# 관리자 URL 패턴
-ADMIN_PATH_RE = re.compile(
-    r"/(?:adm|admin|administrator|admincp|wp-admin|manager|manage|management|"
-    r"backend|backoffice|console|control-panel|controlpanel|cpanel|dashboard|staff)(?:/|$)",
-    re.IGNORECASE,
-)
-
-# 상태 변환을 시킬 수 있는 위험한 URL 패턴
+ADMIN_PATH_RE = re.compile(r"/(?:adm|admin|administrator|manager)(?:/|$)", re.IGNORECASE)
 DESTRUCTIVE_PATH_RE = re.compile(
     r"(delete|del_|remove|update|insert|write_update|save|logout|upload|drop)",
     re.IGNORECASE,
@@ -34,6 +26,24 @@ def make_run_path_fn(run_dir: str) -> Callable[[str], str]:
     return lambda filename: os.path.join(run_dir, filename)
 
 
+# JSON 파일이 있으면 읽고 없으면 기본값을 반환
+def _load_json(path: str, default):
+    if not os.path.exists(path):
+        return default
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+# 역할별 인증 쿠키를 로드하여 반환
+def load_role_cookies(run_path_fn: Callable[[str], str]) -> dict[str, dict]:
+    role_cookies: dict[str, dict] = {"guest": {}}
+    for role in ("member", "admin"):
+        cookies = _load_json(run_path_fn(f"auth_cookies_{role}.json"), {})
+        if cookies:
+            role_cookies[role] = cookies
+    return role_cookies
+
+
 # 수직 권한 상승 테스트에서 위험한 URL인지 확인
 def _is_safe_get_candidate(url: str) -> bool:
     path = urlparse(url).path.lower()
@@ -43,7 +53,7 @@ def _is_safe_get_candidate(url: str) -> bool:
 # 크롤 결과에서 관리자 전용 URL 후보를 수집
 def collect_admin_urls(
     crawl_pages: list[dict],
-    include_path_patterns: bool = True,
+    include_path_patterns: bool = False,
     limit: int | None = None,
 ) -> list[dict]:
     candidates: list[dict] = []
@@ -55,7 +65,7 @@ def collect_admin_urls(
             continue
 
         accessible_by = {str(r).lower() for r in page.get("accessible_by", [])}
-        admin_only = "admin" in accessible_by and not ({"guest", "member", "member1", "member2", "user"} & accessible_by)
+        admin_only = "admin" in accessible_by and not ({"guest", "member", "member2", "user"} & accessible_by)
 
         if admin_only:
             source = "accessible_by_admin_only"
@@ -130,7 +140,7 @@ def run_vertical_probe(
     run_path_fn: Callable[[str], str],
     timeout: int = 10,
     delay: float = 0.0,
-    include_path_patterns: bool = True,
+    include_path_patterns: bool = False,
     limit: int | None = None,
     progress_callback=None,
 ) -> list[dict]:
@@ -139,7 +149,7 @@ def run_vertical_probe(
     results_file = run_path_fn(RESULTS_FILE)
 
     crawl_pages = _load_json(crawl_file, [])
-    role_cookies = load_cookies(run_path_fn)
+    role_cookies = load_role_cookies(run_path_fn)
     admin_urls = collect_admin_urls(
         crawl_pages,
         include_path_patterns=include_path_patterns,
