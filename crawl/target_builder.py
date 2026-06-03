@@ -197,8 +197,3 @@ if __name__ == "__main__":
         json.dump(targets, f, ensure_ascii=False, indent=2)
 
     print(f"저장 완료: {OUTPUT_FILE}  ({len(targets)}개 타겟)")
-    try:
-        from pause_on_exit import pause_if_enabled
-        pause_if_enabled()
-    except Exception:
-        pass

@@ -186,6 +186,29 @@ def _execute_single(t: dict, session: requests.Session, timeout: int, delay: flo
         except Exception:
             body_text = None
 
+        # Stored XSS 검증: POST 성공 후 source_url GET → 렌더링 페이지 확인
+        verify_body = None
+        source_url = t.get("source_url", "")
+        is_xss_post = (
+            method == "POST"
+            and source_url
+            and "xss" in str(t.get("meta", {}).get("vuln_type", "")).lower()
+            and resp.status_code is not None
+            and resp.status_code < 500
+        )
+        if is_xss_post:
+            try:
+                vresp = session.get(
+                    source_url,
+                    headers=headers,
+                    cookies=cookies,
+                    timeout=timeout,
+                    allow_redirects=True,
+                )
+                verify_body = vresp.text[:20000] if vresp.text else None
+            except Exception:
+                verify_body = None
+
         return {
             **base,
             "url": url,
@@ -194,6 +217,7 @@ def _execute_single(t: dict, session: requests.Session, timeout: int, delay: flo
             "length": len(resp.content) if resp.content is not None else None,
             "elapsed": round(elapsed, 3),
             "response_body": body_text[:20000] if body_text else None,
+            "verify_body": verify_body,
         }
     except requests.Timeout:
         elapsed = time.perf_counter() - started

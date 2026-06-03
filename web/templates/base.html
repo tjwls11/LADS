@@ -62,6 +62,10 @@
         <span class="material-symbols-outlined">gps_fixed</span>
         타깃 설정
       </a>
+      <a class="nav-link {% if path == '/bac' %}nav-active{% endif %}" href="/bac">
+        <span class="material-symbols-outlined">lock_open</span>
+        BAC 진단
+      </a>
       <a class="nav-link {% if path == '/runs' or path.startswith('/runs/') %}nav-active{% endif %}" href="/runs">
         <span class="material-symbols-outlined">history</span>
         실행 이력
@@ -88,6 +92,7 @@
       <div class="grid gap-4">
         <a href="/">파이프라인 모니터</a>
         <a href="/findings">취약점 목록</a>
+        <a href="/bac">BAC 진단</a>
         <a href="/targets">타깃 설정</a>
         <a href="/runs">실행 이력</a>
       </div>

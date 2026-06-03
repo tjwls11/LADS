@@ -416,7 +416,7 @@ def login_all_roles(
     roles: dict[str, dict] = {"guest": {}}
     url = url or os.getenv("LOGIN_URL", "") or ensure_login_url(base_url, timeout=timeout)
     if not url:
-        print("[AUTH] login URL not configured and auto-discovery failed", file=sys.stderr)
+        print("[AUTH - FAIL] login URL이 설정되지 않았고, 자동검색에 실패함", file=sys.stderr)
         return roles
 
     common = dict(
@@ -432,26 +432,26 @@ def login_all_roles(
         ok, cookies = login(session, login_id=LOGIN_ID_1, login_password=LOGIN_PASSWORD_1, **common)
         if ok:
             roles["member"] = cookies
-            print(f"[AUTH - OK] member login success: {len(cookies)} cookies")
+            print(f"[AUTH - OK] member login 성공: {len(cookies)} cookies")
         else:
-            print("[AUTH - FAIL] member login failed; skipped", file=sys.stderr)
+            print("[AUTH - FAIL] member login 실패; 스킵.", file=sys.stderr)
 
     if LOGIN_ID_2:
         session = _make_session()
         ok, cookies = login(session, login_id=LOGIN_ID_2, login_password=LOGIN_PASSWORD_2, **common)
         if ok:
             roles["member2"] = cookies
-            print(f"[AUTH - OK] member2 login success: {len(cookies)} cookies")
+            print(f"[AUTH - OK] member2 login 성공: {len(cookies)} cookies")
         else:
-            print("[AUTH - FAIL] member2 login failed; skipped", file=sys.stderr)
+            print("[AUTH - FAIL] member2 login 실패; 스킵.", file=sys.stderr)
 
     if ADMIN_ID:
         session = _make_session()
         ok, cookies = login(session, login_id=ADMIN_ID, login_password=ADMIN_PASSWORD, **common)
         if ok:
             roles["admin"] = cookies
-            print(f"[AUTH - OK] admin login success: {len(cookies)} cookies")
+            print(f"[AUTH - OK] admin login 성공: {len(cookies)} cookies")
         else:
-            print("[AUTH - FAIL] admin login failed; skipped", file=sys.stderr)
+            print("[AUTH - FAIL] admin login 실패; 스킵.", file=sys.stderr)
 
     return roles
