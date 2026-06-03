@@ -7,6 +7,20 @@ import sys
 import threading
 from datetime import datetime
 
+from utilities import _load_json
+from dotenv import load_dotenv
+from flask import Flask, Response, redirect, render_template, request
+from tasks import (
+    _task_crawl as _crawl_impl,
+    _task_payload as _payload_impl,
+    _task_probe as _probe_impl,
+    _task_execute as _execute_impl,
+    _task_validate as _validate_impl,
+    _task_misconfig as _misconfig_impl,
+    _task_bac_stream as _bac_impl,
+    _task_main_stream as _all_impl,
+    TASK_LABELS as _TASK_LABELS,
+)
 
 _DEPS = {
     "flask": "flask",
@@ -25,20 +39,6 @@ for _pkg, _mod in _DEPS.items():
         subprocess.check_call([sys.executable, "-m", "pip", "install", _pkg, "-q"])
 del _pkg, _mod
 
-from dotenv import load_dotenv
-from flask import Flask, Response, redirect, render_template, request
-from tasks import (
-    _task_crawl as _crawl_impl,
-    _task_payload as _payload_impl,
-    _task_probe as _probe_impl,
-    _task_execute as _execute_impl,
-    _task_validate as _validate_impl,
-    _task_bac as _bac_impl,
-    _task_misconfig as _misconfig_impl,
-    _task_all as _all_impl,
-    TASK_LABELS as _TASK_LABELS,
-)
-
 load_dotenv()
 
 
@@ -46,7 +46,6 @@ TARGETS_CONFIG_FILE = "targets_config.json"
 PAYLOADS_FILE = os.getenv("PAYLOADS_FILE", "results/payloads_llm.json")
 PAYLOADS_META_FILE = os.getenv("PAYLOADS_META_FILE", "results/payloads_llm_meta.json")
 RUNS_DIR = "runs"
-
 
 def _load_targets() -> list[dict]:
     if os.path.exists(TARGETS_CONFIG_FILE):
@@ -108,6 +107,8 @@ def _apply_active_target_env(target: dict) -> None:
 
 _TARGETS: list[dict] = _load_targets()
 _active_target_key: str = _TARGETS[0]["key"] if _TARGETS else ""
+if _TARGETS:
+    _apply_active_target_env(_TARGETS[0])
 _current_run_id: str | None = None
 
 app = Flask(__name__, template_folder='web/templates', static_folder='web/static')
@@ -162,25 +163,75 @@ def _make_run_id() -> str:
     return datetime.now().strftime("run_%Y%m%d_%H%M%S")
 
 
-def _init_run() -> None:
-    global _current_run_id
-    os.makedirs(RUNS_DIR, exist_ok=True)
-    existing = sorted(
+def _run_dir(run_id: str) -> str:
+    return os.path.join(RUNS_DIR, run_id)
+
+
+def _infer_run_type(run_id: str) -> str:
+    run_dir = _run_dir(run_id)
+    meta = _load_json(os.path.join(run_dir, "run_meta.json"), {})
+    run_type = meta.get("run_type")
+    if run_type in {"main", "bac"}:
+        return run_type
+
+    try:
+        files = set(os.listdir(run_dir))
+    except Exception:
+        return "main"
+    if "bac_vertical_results.json" in files or "bac_findings.json" in files or "bac_vertical_tasks.json" in files:
+        return "bac"
+    return "main"
+
+
+def _write_run_meta(run_id: str, run_type: str) -> None:
+    meta = {
+        "run_type": run_type,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "target_url": _active_url(),
+    }
+    with open(os.path.join(_run_dir(run_id), "run_meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+
+
+def _create_run(run_type: str) -> str:
+    run_id = _make_run_id()
+    os.makedirs(_run_dir(run_id), exist_ok=True)
+    _write_run_meta(run_id, run_type)
+    return run_id
+
+
+def _list_run_ids() -> list[str]:
+    if not os.path.exists(RUNS_DIR):
+        return []
+    return sorted(
         [
             d for d in os.listdir(RUNS_DIR)
             if os.path.isdir(os.path.join(RUNS_DIR, d)) and d.startswith("run_")
         ],
         reverse=True,
     )
+
+
+def _latest_run_id(run_type: str | None = None) -> str | None:
+    for run_id in _list_run_ids():
+        if run_type is None or _infer_run_type(run_id) == run_type:
+            return run_id
+    return None
+
+
+def _init_run() -> None:
+    global _current_run_id
+    os.makedirs(RUNS_DIR, exist_ok=True)
+    existing = _list_run_ids()
     if existing:
         _current_run_id = existing[0]
     else:
-        _current_run_id = _make_run_id()
-        os.makedirs(os.path.join(RUNS_DIR, _current_run_id), exist_ok=True)
+        _current_run_id = _create_run("main")
 
 
 def _run_path(filename: str, run_id: str | None = None) -> str:
     return os.path.join(RUNS_DIR, run_id or _current_run_id or "default", filename)
+
 
 
 def _active_url() -> str:
@@ -224,7 +275,7 @@ def _task_payload():
 
 
 def _task_probe():
-    _probe_impl(_run_path, PAYLOADS_FILE, PAYLOADS_META_FILE, _emit_progress)
+    _probe_impl(_run_path, PAYLOADS_FILE, _emit_progress)
 
 
 def _task_execute():
@@ -235,17 +286,15 @@ def _task_validate():
     _validate_impl(_run_path, _emit_progress)
 
 
-def _task_bac():
-    _bac_impl(_run_path, _emit_progress)
-
-
 def _task_misconfig():
     _misconfig_impl(_run_path, _active_url(), _emit_progress)
 
 
 def _task_all(skip_crawl: bool = False, resume: bool = False):
-    _all_impl(_run_path, _active_url(), PAYLOADS_FILE, PAYLOADS_META_FILE, skip_crawl=skip_crawl, resume=resume, emit_progress=_emit_progress)
+    _all_impl(_run_path, _active_url(), PAYLOADS_FILE, PAYLOADS_META_FILE, skip_crawl=skip_crawl, resume= resume, emit_progress=_emit_progress)
 
+def _task_bac():
+    _bac_impl(_run_path, _active_url(), _emit_progress)
 
 _TASK_FUNCS = {
     "crawl":    _task_crawl,
@@ -253,8 +302,8 @@ _TASK_FUNCS = {
     "probe":    _task_probe,
     "execute":  _task_execute,
     "validate": _task_validate,
-    "bac":      _task_bac,
     "misconfig": _task_misconfig,
+    "bac":      _task_bac,
     "all":      _task_all,
 }
 
@@ -270,15 +319,30 @@ def stream_task(task):
     # 이미 실행 중이면 태스크를 새로 시작하지 않고 기존 브로드캐스트에 구독만
     already_running = _running_task is not None
 
+    global _current_run_id
     if not already_running:
-        # 새 런 생성 조건
-        if task == "all" and not skip_crawl and not resume:
-            global _current_run_id
-            _current_run_id = _make_run_id()
-            os.makedirs(os.path.join(RUNS_DIR, _current_run_id), exist_ok=True)
-            # 새 런 시작 시 로그 버퍼 초기화
-            with _log_lock:
-                _log_buffer.clear()
+        if task == "all" and resume:
+            current_main = _current_run_id if _current_run_id and _infer_run_type(_current_run_id) == "main" else None
+            resume_run = current_main or _latest_run_id("main")
+            if resume_run:
+                _current_run_id = resume_run
+            else:
+                _current_run_id = _create_run("main")
+                resume = False
+        elif task == "all" and skip_crawl:
+            latest_main_run = _latest_run_id("main")
+            if latest_main_run:
+                _current_run_id = latest_main_run
+            else:
+                _current_run_id = _create_run("main")
+                skip_crawl = False
+        elif task == "all":
+            _current_run_id = _create_run("main")
+        elif task == "bac":
+            _current_run_id = _create_run("bac")
+            
+        with _log_lock:
+            _log_buffer.clear()
 
         def run_in_thread():
             global _running_task
@@ -340,20 +404,23 @@ def _list_runs() -> list[dict]:
             ts = datetime.strptime(d, "run_%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
         except Exception:
             ts = d
+        run_type = _infer_run_type(d)
         findings_cnt = 0
-        if "findings.json" in files:
-            try:
-                with open(os.path.join(full, "findings.json"), encoding="utf-8") as f:
-                    findings_cnt = len(json.load(f))
-            except Exception:
-                pass
+        for findings_file in ("findings.json", "bac_findings.json"):
+            if findings_file in files:
+                try:
+                    with open(os.path.join(full, findings_file), encoding="utf-8") as f:
+                        findings_cnt += len(json.load(f))
+                except Exception:
+                    pass
         runs.append({
             "id": d,
             "ts": ts,
+            "run_type": run_type,
             "is_current": d == _current_run_id,
             "has_crawl": "crawl_result.json" in files,
-            "has_exec": "execution_results.json" in files,
-            "has_findings": "findings.json" in files,
+            "has_exec": "execution_results.json" in files or "bac_vertical_results.json" in files,
+            "has_findings": "findings.json" in files or "bac_findings.json" in files,
             "findings_cnt": findings_cnt,
         })
     return runs
@@ -468,6 +535,27 @@ def index():
     )
 
 
+@app.route("/bac")
+def bac_page():
+    bac_findings_file = _run_path("bac_findings.json")
+    bac_findings = []
+    if os.path.exists(bac_findings_file):
+        try:
+            with open(bac_findings_file, encoding="utf-8") as f:
+                bac_findings = json.load(f)
+        except Exception:
+            pass
+    return render_template(
+        "bac.html",
+        bac_findings=bac_findings,
+        bac_cnt=len(bac_findings),
+        has_crawl=os.path.exists(_run_path("crawl_result.json")),
+        has_bac_results=os.path.exists(_run_path("bac_vertical_results.json")),
+        has_bac_findings=os.path.exists(bac_findings_file),
+        current_run=_current_run_id or "",
+    )
+
+
 @app.route("/results")
 def results_page():
     return redirect("/findings")
@@ -478,6 +566,8 @@ def findings_page():
     run_id = request.args.get("run") or _current_run_id
     findings_file = _run_path("findings.json", run_id=run_id)
     exec_file = _run_path("execution_results.json", run_id=run_id)
+    bac_findings_file = _run_path("bac_findings.json", run_id=run_id)
+    bac_exec_file = _run_path("bac_vertical_results.json", run_id=run_id)
 
     findings = []
     if os.path.exists(findings_file):
@@ -486,6 +576,8 @@ def findings_page():
                 findings = json.load(f)
         except Exception as exc:
             return f"결과 파일 읽기 오류: {exc}", 500
+
+    findings.extend(_load_json(bac_findings_file, []))
 
     xss_cnt       = sum(1 for f in findings if f.get("module") == "xss")
     sqli_cnt      = sum(1 for f in findings if f.get("module") == "sqli")
@@ -505,7 +597,22 @@ def findings_page():
                 r["_evidence"] = hit.get("evidence", "") if hit else ""
                 r["_vuln_type"] = hit.get("module", "") if hit else (r.get("meta") or {}).get("vuln_type", "")
             all_results = exec_results
-            safe_cnt = sum(1 for r in all_results if not r.get("_vulnerable") and not r.get("error"))
+        except Exception:
+            pass
+
+    if os.path.exists(bac_exec_file):
+        try:
+            findings_by_id = {f.get("id"): f for f in findings}
+            with open(bac_exec_file, encoding="utf-8") as f:
+                bac_exec_results = json.load(f)
+            for r in bac_exec_results:
+                hit = findings_by_id.get(r.get("id"))
+                meta = r.get("meta") or {}
+                r["_vulnerable"] = hit is not None
+                r["_evidence"] = hit.get("evidence", "") if hit else ""
+                r["_vuln_type"] = hit.get("module", "") if hit else meta.get("vuln_type", "bac")
+                r["_role"] = meta.get("role", "")
+            all_results.extend(bac_exec_results)
         except Exception:
             pass
 
@@ -526,6 +633,8 @@ def findings_page():
             "status":       mf.get("status"),
             "error":        None,
         })
+
+    safe_cnt = sum(1 for r in all_results if not r.get("_vulnerable") and not r.get("error"))
 
     return render_template(
         "findings.html",
@@ -660,8 +769,7 @@ def runs_page():
 @app.route("/runs/new", methods=["POST"])
 def new_run():
     global _current_run_id
-    _current_run_id = _make_run_id()
-    os.makedirs(os.path.join(RUNS_DIR, _current_run_id), exist_ok=True)
+    _current_run_id = _create_run("main")
     return redirect("/")
 
 
@@ -677,6 +785,7 @@ def run_detail(run_id):
         ts = run_id
 
     files = set(os.listdir(run_dir))
+    run_type = _infer_run_type(run_id)
 
     findings, xss_cnt, sqli_cnt, bac_cnt, misconfig_cnt = [], 0, 0, 0, 0
     if "findings.json" in files:
@@ -689,6 +798,11 @@ def run_detail(run_id):
             misconfig_cnt = sum(1 for fi in findings if fi.get("module") == "misconfig")
         except Exception:
             pass
+    if "bac_findings.json" in files:
+        findings.extend(_load_json(os.path.join(run_dir, "bac_findings.json"), []))
+    xss_cnt = sum(1 for fi in findings if fi.get("module") == "xss")
+    sqli_cnt = sum(1 for fi in findings if fi.get("module") == "sqli")
+    bac_cnt = sum(1 for fi in findings if fi.get("module") == "bac")
 
     exec_results, exec_ok, exec_timeout, exec_err = [], 0, 0, 0
     if "execution_results.json" in files:
@@ -700,18 +814,24 @@ def run_detail(run_id):
             exec_err     = sum(1 for r in exec_results if r.get("error") and r.get("error") != "timeout")
         except Exception:
             pass
+    if "bac_vertical_results.json" in files:
+        exec_results.extend(_load_json(os.path.join(run_dir, "bac_vertical_results.json"), []))
+    exec_ok = sum(1 for r in exec_results if r.get("error") is None)
+    exec_timeout = sum(1 for r in exec_results if r.get("error") == "timeout")
+    exec_err = sum(1 for r in exec_results if r.get("error") and r.get("error") != "timeout")
 
     return render_template(
         "run_detail.html",
         run_id=run_id,
         ts=ts,
+        run_type=run_type,
         is_current=(run_id == _current_run_id),
         has_crawl="crawl_result.json" in files,
         has_targets="targets.json" in files,
         has_payload=os.path.exists(PAYLOADS_FILE),
-        has_probe="probe_tasks.json" in files,
-        has_exec="execution_results.json" in files,
-        has_findings="findings.json" in files,
+        has_probe="probe_tasks.json" in files or "bac_vertical_tasks.json" in files,
+        has_exec="execution_results.json" in files or "bac_vertical_results.json" in files,
+        has_findings="findings.json" in files or "bac_findings.json" in files,
         findings=findings,
         xss_cnt=xss_cnt,
         sqli_cnt=sqli_cnt,
