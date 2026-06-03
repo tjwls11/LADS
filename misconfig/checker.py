@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
+import sys
 import re
 import time
 import requests
 import requests.exceptions
 from typing import Optional
+from utilities import normalize_base_url, save_json
 
 from findings import (
     misconfig_finding,
@@ -522,7 +524,7 @@ def _check_error_disclosure(base_url: str) -> list[dict]:
 # ── 메인 체크 함수 ────────────────────────────────────────────
 
 def check(base_url: str, progress_callback=None) -> list[dict]:
-    base_url = base_url.rstrip("/")
+    base_url = normalize_base_url(base_url)
     findings: list[dict] = []
 
     total = len(_SENSITIVE_FILES) + len(_DIRECTORY_PATHS) + 2  # +2: headers, error
@@ -564,9 +566,6 @@ def run(
     append: bool = True,
 ) -> list[dict]:
 
-    import json
-    import os
-
     print(f"[MISCONFIG] start → {base_url}")
     findings = check(base_url, progress_callback=progress_callback)
 
@@ -574,19 +573,15 @@ def run(
     warnings  = sum(1 for f in findings if f.get("type") == MISCONFIG_WARNING)
     print(f"[MISCONFIG] done: confirmed={confirmed}, warning={warnings}, total={len(findings)}")
 
-    os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-
     if append:
         append_findings(findings, output_file)
     else:
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(findings, f, ensure_ascii=False, indent=2)
+        save_json(output_file, findings)
 
     return findings
 
 
 if __name__ == "__main__":
-    import sys
     target = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8081"
     result = run(target, output_file="results/misconfig_findings.json", append=False)
     print(f"\n총 {len(result)}개 발견")

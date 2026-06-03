@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 from urllib.parse import urlparse
+from payload.baseline.xss import get_all as xss_get_all
+from payload.baseline.sqli import get_by_sql_context
 
 _DESTRUCTIVE_SQL_RE = re.compile(
     r"\b(drop|delete|update|insert|alter|truncate|create|replace|rename|grant|revoke)\b",
@@ -83,7 +85,6 @@ def _flatten_by_type(payloads: dict) -> dict[str, list]:
 def _get_baseline_records_by_type(vtype: str) -> list[dict]:
     records: list[dict] = []
     if "xss" in vtype:
-        from payload.baseline.xss import get_all as xss_get_all
         for bp in xss_get_all():
             records.append({
                 "vtype": vtype,
@@ -92,7 +93,6 @@ def _get_baseline_records_by_type(vtype: str) -> list[dict]:
                 "payload": bp.get("payload"),
             })
     elif "sqli" in vtype:
-        from payload.baseline.sqli import get_by_sql_context
         ctx_map = {
             "sqli_field":   "field_selector",
             "sqli_orderby": "orderby",
