@@ -33,7 +33,6 @@ from tasks import (
     _task_probe as _probe_impl,
     _task_execute as _execute_impl,
     _task_validate as _validate_impl,
-    _task_bac as _bac_impl,
     _task_misconfig as _misconfig_impl,
     _task_all as _all_impl,
     TASK_LABELS as _TASK_LABELS,
@@ -235,10 +234,6 @@ def _task_validate():
     _validate_impl(_run_path, _emit_progress)
 
 
-def _task_bac():
-    _bac_impl(_run_path, _emit_progress)
-
-
 def _task_misconfig():
     _misconfig_impl(_run_path, _active_url(), _emit_progress)
 
@@ -253,7 +248,6 @@ _TASK_FUNCS = {
     "probe":    _task_probe,
     "execute":  _task_execute,
     "validate": _task_validate,
-    "bac":      _task_bac,
     "misconfig": _task_misconfig,
     "all":      _task_all,
 }

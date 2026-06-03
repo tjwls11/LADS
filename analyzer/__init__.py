@@ -52,10 +52,6 @@ def _resolve_module(vt: str, evidence: str) -> str:
 
 
 def _resolve_type(module: str, verdict: str, evidence: str) -> str:
-    """
-    module + verdict + evidence 로 finding type 을 결정.
-    confidence 와 type 이 따로 놀던 문제(항상 _CONFIRMED / 항상 _MEDIUM)를 없앤다.
-    """
     ev = evidence.lower()
 
     if module == MODULE_SQLI:

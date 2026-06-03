@@ -7,7 +7,6 @@ TASK_LABELS = {
     "probe":    "주입 테스트 준비",
     "execute":  "퍼징 실행",
     "validate": "취약점 판정",
-    "bac":      "접근 통제 검사",
     "misconfig": "설정 오류 점검",
     "all":      "전체 진단",
 }
@@ -220,51 +219,6 @@ def _task_validate(run_path_fn, emit_progress=None):
     _prog(100)
 
 
-def _task_bac(run_path_fn, emit_progress=None):
-    from bac.runner import build_bac_results
-    from analyzer import validate as analyzer_validate
-    from findings import load_findings, save_findings
-
-    def _prog(n):
-        if emit_progress: emit_progress(n)
-
-    findings_file = run_path_fn("findings.json")
-    bac_results_file = run_path_fn("bac_results.json")
-
-    if not os.path.exists(run_path_fn("crawl_result.json")):
-        print(f"[BAC] missing crawl_result.json — BAC 단계 건너뜀")
-        return
-
-    # 1) crawl 결과 URL을 역할별 쿠키로 재요청해 본문 포함 결과 수집
-    def _bac_progress(done, total):
-        _prog(int(done / max(total, 1) * 80))
-
-    results = build_bac_results(run_path_fn, progress_callback=_bac_progress)
-
-    # 디버깅/재현용으로 원시 결과 저장 (선택적)
-    try:
-        with open(bac_results_file, "w", encoding="utf-8") as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-    if not results:
-        print("[BAC] 재요청 결과 없음 — 판정 생략")
-        _prog(100)
-        return
-
-    # 2) analyzer로 BAC 판정
-    bac_findings = [f for f in analyzer_validate(results) if f.get("module") == "bac"]
-
-    # 3) 기존 findings에서 이전 BAC 결과만 제거하고 새 결과 병합 (재실행 안전)
-    existing = load_findings(findings_file)
-    non_bac = [f for f in existing if f.get("module") != "bac"]
-    save_findings(non_bac + bac_findings, findings_file)
-
-    print(f"[BAC] done: findings={len(bac_findings)}")
-    _prog(100)
-
-
 def _task_misconfig(run_path_fn, target_url, emit_progress=None):
     from misconfig.checker import run as misconfig_run
     from findings import load_findings, save_findings
@@ -378,9 +332,6 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
     else:
         _task_validate(run_path_fn, emit_progress)
         _prog(95)
-
-    # ── BAC (역할별 접근 통제 검사) ──
-    _task_bac(run_path_fn, emit_progress)
 
     # ── misconfig (항상 재실행) ──
     _task_misconfig(run_path_fn, target_url, emit_progress)
