@@ -286,7 +286,7 @@ def _task_execute(run_path_fn, emit_progress=None):
         _prog(emit_progress, 35 + int(done / max(total, 1) * 55))
 
     print(f"[EXEC] start: {len(tasks)} tasks")
-    results = execute(tasks, timeout=5, delay=0.3, output_file=exec_file, progress_callback=_execute_progress)
+    results = execute(tasks, timeout=5, delay=0.4, output_file=exec_file, progress_callback=_execute_progress)
     ok      = sum(1 for r in results if r.get("error") is None)
     timeout = sum(1 for r in results if r.get("error") == "timeout")
     err     = sum(1 for r in results if r.get("error") and r.get("error") != "timeout")
