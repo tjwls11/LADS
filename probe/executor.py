@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import requests
@@ -16,6 +18,9 @@ _INPUT_TYPE_RE = re.compile(r'\btype=["\']([^"\']+)["\']', re.IGNORECASE)
 _INPUT_NAME_RE = re.compile(r'\bname=["\']([^"\']+)["\']', re.IGNORECASE)
 _INPUT_VALUE_RE = re.compile(r'\bvalue=["\']([^"\']*)["\']', re.IGNORECASE)
 _CSRF_NAME_RE = re.compile(r"(csrf|token|nonce|_token|authenticity|captcha)", re.IGNORECASE)
+
+# 스레드별 독립 세션 저장소
+_local = threading.local()
 
 
 def _fetch_fresh_csrf(session: requests.Session, source_url: str, timeout: int) -> dict[str, str]:
@@ -66,212 +71,215 @@ def _make_session() -> requests.Session:
     return s
 
 
+def _get_session() -> requests.Session:
+    """스레드별 독립 세션 반환 — 없으면 새로 생성."""
+    if not hasattr(_local, "session"):
+        _local.session = _make_session()
+    return _local.session
+
+
+def _execute_single(t: dict, session: requests.Session, timeout: int, delay: float) -> dict:
+    """태스크 하나 실행 → 결과 dict 반환."""
+    if delay:
+        time.sleep(delay)
+
+    point = t.get("point")
+    payload = t.get("payload")
+    inject_mode = t.get("inject_mode", "replace")
+    inject_location = t.get("inject_location", "query")
+    inject_param = t.get("inject_param")
+
+    base: dict[str, Any] = {
+        "id": t.get("id"),
+        "point": point,
+        "payload": payload,
+        "inject_mode": inject_mode,
+        "inject_location": inject_location,
+        "inject_param": inject_param,
+        "meta": t.get("meta") or {},
+        "error": None,
+    }
+
+    url = t.get("url")
+    method = str(t.get("method", "GET")).upper()
+
+    if not url or payload is None or not inject_param:
+        return {**base, "error": "invalid_task"}
+
+    base_params = dict(t.get("base_params") or {})
+    base_headers = dict(t.get("base_headers") or {})
+    base_cookies = dict(t.get("base_cookies") or {})
+    base_value = str(t.get("base_value") or "")
+
+    if t.get("needs_csrf_refresh") and method == "POST":
+        src = t.get("source_url", "")
+        if src:
+            base_params.update(_fetch_fresh_csrf(session, src, timeout))
+
+    if inject_mode == "append":
+        injected = f"{base_value}{payload}"
+    else:
+        injected = str(payload)
+
+    params = None
+    data = None
+    headers = dict(base_headers)
+    cookies = dict(base_cookies)
+
+    loc = str(inject_location).lower()
+    if loc == "header":
+        headers[str(inject_param)] = injected
+        if method == "POST":
+            data = dict(base_params)
+        else:
+            params = dict(base_params)
+    elif loc == "cookie":
+        cookies[str(inject_param)] = injected
+        if method == "POST":
+            data = dict(base_params)
+        else:
+            params = dict(base_params)
+    elif loc == "body":
+        data = dict(base_params)
+        data[str(inject_param)] = injected
+    else:
+        params = dict(base_params)
+        params[str(inject_param)] = injected
+
+    started = time.perf_counter()
+    try:
+        if method == "POST":
+            enctype = str(t.get("enctype") or "").lower()
+            if "multipart" in enctype and data:
+                resp = session.post(
+                    url,
+                    params=params,
+                    files={k: (None, str(v)) for k, v in data.items()},
+                    headers=headers,
+                    cookies=cookies,
+                    timeout=timeout,
+                    allow_redirects=True,
+                )
+            else:
+                resp = session.post(
+                    url,
+                    params=params,
+                    data=data,
+                    headers=headers,
+                    cookies=cookies,
+                    timeout=timeout,
+                    allow_redirects=True,
+                )
+        else:
+            resp = session.get(
+                url,
+                params=params,
+                headers=headers,
+                cookies=cookies,
+                timeout=timeout,
+                allow_redirects=True,
+            )
+
+        elapsed = time.perf_counter() - started
+        try:
+            body_text = resp.text
+        except Exception:
+            body_text = None
+
+        # Stored XSS 검증: POST 성공 후 source_url GET → 렌더링 페이지 확인
+        verify_body = None
+        source_url = t.get("source_url", "")
+        is_xss_post = (
+            method == "POST"
+            and source_url
+            and "xss" in str(t.get("meta", {}).get("vuln_type", "")).lower()
+            and resp.status_code is not None
+            and resp.status_code < 500
+        )
+        if is_xss_post:
+            try:
+                vresp = session.get(
+                    source_url,
+                    headers=headers,
+                    cookies=cookies,
+                    timeout=timeout,
+                    allow_redirects=True,
+                )
+                verify_body = vresp.text[:20000] if vresp.text else None
+            except Exception:
+                verify_body = None
+
+        return {
+            **base,
+            "url": url,
+            "method": method,
+            "status": resp.status_code,
+            "length": len(resp.content) if resp.content is not None else None,
+            "elapsed": round(elapsed, 3),
+            "response_body": body_text[:20000] if body_text else None,
+            "verify_body": verify_body,
+        }
+    except requests.Timeout:
+        elapsed = time.perf_counter() - started
+        return {
+            **base,
+            "url": url,
+            "method": method,
+            "status": None,
+            "length": 0,
+            "elapsed": round(elapsed, 3),
+            "response_body": None,
+            "error": "timeout",
+        }
+    except Exception as e:
+        elapsed = time.perf_counter() - started
+        return {
+            **base,
+            "url": url,
+            "method": method,
+            "status": None,
+            "length": 0,
+            "elapsed": round(elapsed, 3),
+            "response_body": None,
+            "error": f"exception:{type(e).__name__}",
+        }
+
+
 def execute(
     tasks: list[dict],
     timeout: int = 10,
     delay: float = 0.0,
     output_file: str | None = None,
     progress_callback=None,
+    workers: int = 10,
 ) -> list[dict]:
-    # probe task -> HTTP send -> results
+    # probe task -> HTTP 병렬 전송 -> results
 
-    session = _make_session()
-    results: list[dict] = []
     total = len(tasks)
 
-    for i, t in enumerate(tasks):
-        if delay:
-            time.sleep(delay)
+    # 순서 보존: 인덱스 기반 pre-allocated 리스트
+    results: list[dict | None] = [None] * total
+    _lock = threading.Lock()
+    _done = [0]
 
-        point = t.get("point")
-        payload = t.get("payload")
-        inject_mode = t.get("inject_mode", "replace")
-        inject_location = t.get("inject_location", "query")
-        inject_param = t.get("inject_param")
-
-        base: dict[str, Any] = {
-            "id": t.get("id"),
-            "point": point,
-            "payload": payload,
-            "inject_mode": inject_mode,
-            "inject_location": inject_location,
-            "inject_param": inject_param,
-            "meta": t.get("meta") or {},
-            "error": None,
-        }
-
-        url = t.get("url")
-        method = str(t.get("method", "GET")).upper()
-
-        if not url:
-            results.append({**base, "error": "invalid_task"})
-            continue
-
-        base_params = dict(t.get("base_params") or {})
-        base_headers = dict(t.get("base_headers") or {})
-        base_cookies = dict(t.get("base_cookies") or {})
-        base_value = str(t.get("base_value") or "")
-
-        if inject_mode == "noop":
-            params = dict(base_params) or None
-            data = None
-            headers = dict(base_headers)
-            cookies = dict(base_cookies)
-            started = time.perf_counter()
-            try:
-                resp = session.get(
-                    url,
-                    params=params,
-                    headers=headers,
-                    cookies=cookies,
-                    timeout=timeout,
-                    allow_redirects=True,
-                )
-                elapsed = time.perf_counter() - started
-                try:
-                    body_text = resp.text
-                except Exception:
-                    body_text = None
-                results.append({
-                    **base,
-                    "url": url,
-                    "method": method,
-                    "status": resp.status_code,
-                    "length": len(resp.content) if resp.content is not None else None,
-                    "elapsed": round(elapsed, 3),
-                    "response_body": body_text[:20000] if body_text else None,
-                })
-            except requests.Timeout:
-                elapsed = time.perf_counter() - started
-                results.append({**base, "url": url, "method": method, "status": None, "length": 0, "elapsed": round(elapsed, 3), "response_body": None, "error": "timeout"})
-            except Exception as e:
-                elapsed = time.perf_counter() - started
-                results.append({**base, "url": url, "method": method, "status": None, "length": 0, "elapsed": round(elapsed, 3), "response_body": None, "error": f"exception:{type(e).__name__}"})
-            if progress_callback and total > 0:
-                progress_callback(i + 1, total)
-            continue
-
-        if payload is None or not inject_param:
-            results.append({**base, "error": "invalid_task"})
-            continue
-
-        if t.get("needs_csrf_refresh") and method == "POST":
-            src = t.get("source_url", "")
-            if src:
-                base_params.update(_fetch_fresh_csrf(session, src, timeout))
-
-        if inject_mode == "append":
-            injected = f"{base_value}{payload}"
-        else:
-            injected = str(payload)
-
-        params = None
-        data = None
-        headers = dict(base_headers)
-        cookies = dict(base_cookies)
-
-        loc = str(inject_location).lower()
-        if loc == "header":
-            headers[str(inject_param)] = injected
-            if method == "POST":
-                data = dict(base_params)
-            else:
-                params = dict(base_params)
-        elif loc == "cookie":
-            cookies[str(inject_param)] = injected
-            if method == "POST":
-                data = dict(base_params)
-            else:
-                params = dict(base_params)
-        elif loc == "body":
-            data = dict(base_params)
-            data[str(inject_param)] = injected
-        else:
-            params = dict(base_params)
-            params[str(inject_param)] = injected
-
-        started = time.perf_counter()
-        try:
-            if method == "POST":
-                enctype = str(t.get("enctype") or "").lower()
-                if "multipart" in enctype and data:
-                    resp = session.post(
-                        url,
-                        params=params,
-                        files={k: (None, str(v)) for k, v in data.items()},
-                        headers=headers,
-                        cookies=cookies,
-                        timeout=timeout,
-                        allow_redirects=True,
-                    )
-                else:
-                    resp = session.post(
-                        url,
-                        params=params,
-                        data=data,
-                        headers=headers,
-                        cookies=cookies,
-                        timeout=timeout,
-                        allow_redirects=True,
-                    )
-            else:
-                resp = session.get(
-                    url,
-                    params=params,
-                    headers=headers,
-                    cookies=cookies,
-                    timeout=timeout,
-                    allow_redirects=True,
-                )
-
-            elapsed = time.perf_counter() - started
-            try:
-                body_text = resp.text
-            except Exception:
-                body_text = None
-
-            results.append(
-                {
-                    **base,
-                    "url": url,
-                    "method": method,
-                    "status": resp.status_code,
-                    "length": len(resp.content) if resp.content is not None else None,
-                    "elapsed": round(elapsed, 3),
-                    "response_body": body_text[:20000] if body_text else None,
-                }
-            )
-        except requests.Timeout:
-            elapsed = time.perf_counter() - started
-            results.append(
-                {
-                    **base,
-                    "url": url,
-                    "method": method,
-                    "status": None,
-                    "length": 0,
-                    "elapsed": round(elapsed, 3),
-                    "response_body": None,
-                    "error": "timeout",
-                }
-            )
-        except Exception as e:
-            elapsed = time.perf_counter() - started
-            results.append(
-                {
-                    **base,
-                    "url": url,
-                    "method": method,
-                    "status": None,
-                    "length": 0,
-                    "elapsed": round(elapsed, 3),
-                    "response_body": None,
-                    "error": f"exception:{type(e).__name__}",
-                }
-            )
-
+    def _run(idx: int, t: dict) -> None:
+        session = _get_session()
+        result = _execute_single(t, session, timeout, delay)
+        results[idx] = result
         if progress_callback and total > 0:
-            progress_callback(i + 1, total)
+            with _lock:
+                _done[0] += 1
+                progress_callback(_done[0], total)
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(_run, i, t) for i, t in enumerate(tasks)]
+        for f in as_completed(futures):
+            try:
+                f.result()
+            except Exception:
+                pass  # 개별 태스크 오류는 result dict의 error 필드에 기록됨
+
+    final_results = [r for r in results if r is not None]
 
     if output_file:
         parent = os.path.dirname(output_file)
@@ -279,6 +287,6 @@ def execute(
             os.makedirs(parent, exist_ok=True)
 
         with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
+            json.dump(final_results, f, ensure_ascii=False, indent=2)
 
-    return results
+    return final_results

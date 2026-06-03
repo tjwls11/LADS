@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 from urllib.parse import urlparse
+from payload.baseline.xss import get_all as xss_get_all
+from payload.baseline.sqli import get_by_sql_context
 
 _DESTRUCTIVE_SQL_RE = re.compile(
     r"\b(drop|delete|update|insert|alter|truncate|create|replace|rename|grant|revoke)\b",
@@ -83,8 +85,9 @@ def _flatten_by_type(payloads: dict) -> dict[str, list]:
 def _get_baseline_records_by_type(vtype: str) -> list[dict]:
     records: list[dict] = []
     if "xss" in vtype:
-        from payload.baseline.xss import get_all as xss_get_all
-        for bp in xss_get_all():
+        from payload.baseline.xss import get_by_strength as xss_get_by_strength
+        # get_by_strength("INSANE"): BODY+ATTR_VALUE+FILTER_BYPASS+SCRIPT_CONTEXT+STORED 전체 ~80개
+        for bp in xss_get_by_strength("INSANE"):
             records.append({
                 "vtype": vtype,
                 "type": bp.get("type"),
@@ -92,7 +95,6 @@ def _get_baseline_records_by_type(vtype: str) -> list[dict]:
                 "payload": bp.get("payload"),
             })
     elif "sqli" in vtype:
-        from payload.baseline.sqli import get_by_sql_context
         ctx_map = {
             "sqli_field":   "field_selector",
             "sqli_orderby": "orderby",
@@ -130,6 +132,7 @@ def build_tasks(
             continue
 
         action = target.get("action", "")
+        source_url = target.get("source_url", "")
         method = (target.get("method") or "GET").upper()
         inject_location = _guess_location(method)
         all_params = target.get("params") or []
@@ -182,6 +185,7 @@ def build_tasks(
                     "id": f"t{tid:06d}_r",
                     "point": _label,
                     "url": action,
+                    "source_url": source_url,
                     "method": method,
                     "inject_location": inject_location,
                     "inject_param": name,

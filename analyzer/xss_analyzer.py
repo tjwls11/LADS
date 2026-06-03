@@ -89,4 +89,15 @@ def validate_xss(test_result: dict) -> tuple[bool, str]:
     if msg:
         return True, f"XSS 성공 [{context}] {msg}"
 
+    # 3) Stored XSS — POST 주입 후 source_url 렌더링 페이지 검증
+    verify_raw = test_result.get("verify_body") or ""
+    if verify_raw:
+        verify_lower = verify_raw.lower()
+        msg = _check_markers(verify_lower, verify_raw)
+        if msg:
+            return True, f"Stored XSS 성공 [렌더링 페이지] {msg}"
+        msg = _check_payload_reflection(payload, verify_lower)
+        if msg:
+            return True, f"Stored XSS 성공 [렌더링 페이지] {msg}"
+
     return False, "안전함 (XSS 시그니처 미검출 / 인코딩됨)"

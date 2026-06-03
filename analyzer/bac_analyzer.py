@@ -126,6 +126,21 @@ def body_similarity(a: str, b: str) -> float:
     return min(la, lb) / max(la, lb)
 
 
+# 로그인/권한거부가 아닌 정상 접근 응답인지 반환
+def _is_success_content(data: dict) -> bool:
+    return (
+        data["status"] == 200
+        and data["size"] >= MIN_VULN_BODY_SIZE
+        and not is_login_page(data["body"])
+        and not is_error_page(data["body"], data["status"])
+    )
+
+
+# 결과 메타데이터에서 시나리오 이름을 반환
+def _get_scenario(r: dict) -> str:
+    return ((r.get("meta") or {}).get("scenario") or "").lower()
+
+
 # ── 단건 판정 ─────────────────────────────────────────────────────
 def validate_bac(test_result: dict) -> tuple[bool, str]:
     if not test_result:
@@ -157,7 +172,7 @@ def validate_bac(test_result: dict) -> tuple[bool, str]:
     if size < MIN_VULN_BODY_SIZE:
         return False, f"안전함 (빈 응답 size={size})"
 
-    if role in ("guest", "member", "user"):
+    if role in ("guest", "member", "member1", "user"):
         return True, f"[VULNERABLE] vertical_escalation — '{role}' 권한으로 '{url}' 접근 성공 (size={size})"
 
     return False, "안전함 (role 정보 없음, 그룹 분석 대기)"
@@ -176,31 +191,56 @@ def detect_bac_group(results: list[dict]) -> list[dict]:
 
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in bac_results:
-        key = (r.get("url"), r.get("method") or "GET")
+        meta = r.get("meta") or {}
+        key = (
+            meta.get("scenario_id") or r.get("point") or r.get("url"),
+            r.get("url"),
+            r.get("method") or "GET",
+        )
         groups[key].append(r)
 
     detected: list[dict] = []
 
-    for (url, _method), group in groups.items():
+    for (_point, url, _method), group in groups.items():
         by_role: dict[str, dict] = {}
         for r in group:
             by_role[_get_role(r)] = r
 
+        scenario = _get_scenario(group[0])
         admin      = by_role.get("admin")
-        member     = by_role.get("member") or by_role.get("user")
+        member1     = by_role.get("member1") or by_role.get("member") or by_role.get("user")
         guest      = by_role.get("guest") or by_role.get("unknown")
         admin_data = _extract(admin) if admin else None
 
-        for low_role_name, low_resp in [("member", member), ("guest", guest)]:
+        if scenario == "member_only_guest_access":
+            if not member1 or not guest:
+                continue
+
+            member_data = _extract(member1)
+            guest_data = _extract(guest)
+            if not _is_success_content(member_data) or not _is_success_content(guest_data):
+                continue
+
+            sim = body_similarity(guest_data["body"], member_data["body"])
+            if sim >= SUSPICIOUS_RATIO:
+                evidence = (
+                    f"BAC member_only_guest_access: 'guest'가 member 전용 URL '{url}'에 접근 성공 "
+                    f"(member 유사도={sim:.0%}, size={guest_data['size']})"
+                )
+            else:
+                evidence = (
+                    f"BAC member_only_guest_access: 'guest'가 member 전용 URL '{url}'에 접근 성공 "
+                    f"(status=200, size={guest_data['size']}, 로그인/권한거부 페이지 아님)"
+                )
+            detected.append({"result": guest, "evidence": evidence})
+            continue
+
+        for low_role_name, low_resp in [("member1", member1), ("guest", guest)]:
             if not low_resp:
                 continue
 
             data = _extract(low_resp)
-            if data["status"] != 200:
-                continue
-            if is_login_page(data["body"]) or is_error_page(data["body"], data["status"]):
-                continue
-            if data["size"] < MIN_VULN_BODY_SIZE:
+            if not _is_success_content(data):
                 continue
 
             if admin_data and admin_data["status"] == 200:
