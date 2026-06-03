@@ -105,6 +105,7 @@ def build_points_from_targets(targets: list[dict]) -> list[dict]:
 
             common = dict(
                 url=url,
+                source_url=target.get("source_url", ""),
                 method=method,
                 param=pname,
                 base_params=base_params,
