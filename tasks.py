@@ -247,10 +247,30 @@ def _task_misconfig(run_path_fn, target_url, emit_progress=None):
 
 
 def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_crawl=False, resume=False, emit_progress=None):
+    import threading
+
     def _prog(n):
         if emit_progress: emit_progress(n)
 
     _prog(2)
+
+    # ── misconfig 병렬 시작 (크롤 의존성 없으므로 즉시 실행) ──
+    _misconfig_results: list[dict] = []
+
+    def _run_misconfig():
+        try:
+            from misconfig.checker import check as misconfig_check
+            print(f"[MISCONFIG] 병렬 시작: {target_url}")
+            results = misconfig_check(target_url)
+            _misconfig_results.extend(results)
+            confirmed = sum(1 for f in results if f.get("type") == "MISCONFIG_CONFIRMED")
+            warnings  = sum(1 for f in results if f.get("type") == "MISCONFIG_WARNING")
+            print(f"[MISCONFIG] 병렬 완료: confirmed={confirmed}, warning={warnings}")
+        except Exception as e:
+            print(f"[MISCONFIG] 오류: {e}")
+
+    misconfig_thread = threading.Thread(target=_run_misconfig, daemon=True)
+    misconfig_thread.start()
 
     # ── 크롤링 ──
     crawl_done = os.path.exists(run_path_fn("crawl_result.json")) and os.path.exists(run_path_fn("targets.json"))
@@ -333,6 +353,13 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
         _task_validate(run_path_fn, emit_progress)
         _prog(95)
 
-    # ── misconfig (항상 재실행) ──
-    _task_misconfig(run_path_fn, target_url, emit_progress)
+    # ── misconfig 결과 병합 ──
+    from findings import load_findings, save_findings
+    print("[MISCONFIG] 병렬 완료 대기 중...")
+    misconfig_thread.join()
+    findings_file = run_path_fn("findings.json")
+    existing = load_findings(findings_file)
+    non_misconfig = [f for f in existing if f.get("module") != "misconfig"]
+    save_findings(non_misconfig + _misconfig_results, findings_file)
+    print(f"[MISCONFIG] 결과 병합 완료: {len(_misconfig_results)}개")
     _prog(100)
