@@ -1,20 +1,29 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 from typing import Callable
 from urllib.parse import urlparse
-
+from utilities import load_json, save_json
+from crawl.auth import load_cookies
 from probe.executor import execute
 
 
-ROLE_ORDER = ("guest", "member", "admin")
+ROLE_ORDER = ("guest", "member1", "admin")
 TASKS_FILE = "bac_vertical_tasks.json"
 RESULTS_FILE = "bac_vertical_results.json"
+MEMBER_ROLES = {"member", "member1", "member2", "user"}
+GUEST_ROLES = {"guest"}
 
-ADMIN_PATH_RE = re.compile(r"/(?:adm|admin|administrator|manager)(?:/|$)", re.IGNORECASE)
+# 관리자 URL 패턴
+ADMIN_PATH_RE = re.compile(
+    r"/(?:adm|admin|administrator|admincp|wp-admin|manager|manage|management|"
+    r"backend|backoffice|console|control-panel|controlpanel|cpanel|dashboard|staff)(?:/|$)",
+    re.IGNORECASE,
+)
+
+# 상태 변환을 시킬 수 있는 위험한 URL 패턴
 DESTRUCTIVE_PATH_RE = re.compile(
     r"(delete|del_|remove|update|insert|write_update|save|logout|upload|drop)",
     re.IGNORECASE,
@@ -26,35 +35,16 @@ def make_run_path_fn(run_dir: str) -> Callable[[str], str]:
     return lambda filename: os.path.join(run_dir, filename)
 
 
-# JSON 파일이 있으면 읽고 없으면 기본값을 반환
-def _load_json(path: str, default):
-    if not os.path.exists(path):
-        return default
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
-
-
-# 역할별 인증 쿠키를 로드하여 반환
-def load_role_cookies(run_path_fn: Callable[[str], str]) -> dict[str, dict]:
-    all_cookies = _load_json(run_path_fn("auth_cookies_roles.json"), {})
-    role_cookies: dict[str, dict] = {"guest": {}}
-    for role in ("member", "admin"):
-        cookies = all_cookies.get(role, {})
-        if cookies:
-            role_cookies[role] = cookies
-    return role_cookies
-
-
 # 수직 권한 상승 테스트에서 위험한 URL인지 확인
 def _is_safe_get_candidate(url: str) -> bool:
     path = urlparse(url).path.lower()
     return not DESTRUCTIVE_PATH_RE.search(path)
 
 
-# 크롤 결과에서 관리자 전용 URL 후보를 수집
-def collect_admin_urls(
+# 크롤 결과에서 수직 권한 테스트 URL 후보를 수집
+def collect_vertical_candidates(
     crawl_pages: list[dict],
-    include_path_patterns: bool = False,
+    include_path_patterns: bool = True,
     limit: int | None = None,
 ) -> list[dict]:
     candidates: list[dict] = []
@@ -66,14 +56,27 @@ def collect_admin_urls(
             continue
 
         accessible_by = {str(r).lower() for r in page.get("accessible_by", [])}
-        admin_only = "admin" in accessible_by and not ({"guest", "member", "member2", "user"} & accessible_by)
+        admin_only = "admin" in accessible_by and not ((GUEST_ROLES | MEMBER_ROLES) & accessible_by)
+        member_only = bool(MEMBER_ROLES & accessible_by) and not (GUEST_ROLES & accessible_by)
 
         if admin_only:
             source = "accessible_by_admin_only"
             confidence = "high"
+            expected_role = "admin"
+            attack_roles = ["member1", "guest"]
+            scenario = "low_role_access_admin_url"
+        elif member_only:
+            source = "accessible_by_member_only"
+            confidence = "high"
+            expected_role = "member1"
+            attack_roles = ["guest"]
+            scenario = "member_only_guest_access"
         elif include_path_patterns and ADMIN_PATH_RE.search(urlparse(url).path):
             source = "admin_path_pattern"
             confidence = "low"
+            expected_role = "admin"
+            attack_roles = ["member1", "guest"]
+            scenario = "low_role_access_admin_url"
         else:
             continue
 
@@ -84,6 +87,9 @@ def collect_admin_urls(
                 "source": source,
                 "candidate_confidence": confidence,
                 "accessible_by": sorted(accessible_by),
+                "expected_role": expected_role,
+                "attack_roles": attack_roles,
+                "scenario": scenario,
             }
         )
 
@@ -93,16 +99,33 @@ def collect_admin_urls(
     return candidates
 
 
-# 관리자 URL 후보를 역할별 noop probe task로 변환
+# 기존 호출부 호환을 위해 관리자 전용 후보만 반환
+def collect_admin_urls(
+    crawl_pages: list[dict],
+    include_path_patterns: bool = True,
+    limit: int | None = None,
+) -> list[dict]:
+    candidates = collect_vertical_candidates(
+        crawl_pages,
+        include_path_patterns=include_path_patterns,
+        limit=None,
+    )
+    admin_candidates = [c for c in candidates if c.get("scenario") == "low_role_access_admin_url"]
+    if limit:
+        return admin_candidates[:limit]
+    return admin_candidates
+
+
+# 수직 권한 URL 후보를 역할별 noop probe task로 변환
 def build_vertical_tasks(
-    admin_urls: list[dict],
+    candidates: list[dict],
     role_cookies: dict[str, dict],
-    roles: tuple[str, ...] = ROLE_ORDER,
 ) -> list[dict]:
     tasks: list[dict] = []
 
-    for idx, candidate in enumerate(admin_urls, start=1):
+    for idx, candidate in enumerate(candidates, start=1):
         scenario_id = f"bac_vertical_{idx:04d}"
+        roles = [candidate["expected_role"], *candidate.get("attack_roles", [])]
         for role in roles:
             if role not in role_cookies:
                 continue
@@ -122,10 +145,11 @@ def build_vertical_tasks(
                     "payload": None,
                     "meta": {
                         "vuln_type": "bac_vertical",
-                        "scenario": "low_role_access_admin_url",
+                        "scenario": candidate["scenario"],
                         "scenario_id": scenario_id,
                         "role": role,
-                        "expected_role": "admin",
+                        "expected_role": candidate["expected_role"],
+                        "attack_roles": candidate.get("attack_roles", []),
                         "source": candidate["source"],
                         "candidate_confidence": candidate["candidate_confidence"],
                         "accessible_by": candidate.get("accessible_by", []),
@@ -141,7 +165,7 @@ def run_vertical_probe(
     run_path_fn: Callable[[str], str],
     timeout: int = 10,
     delay: float = 0.0,
-    include_path_patterns: bool = False,
+    include_path_patterns: bool = True,
     limit: int | None = None,
     progress_callback=None,
 ) -> list[dict]:
@@ -149,25 +173,29 @@ def run_vertical_probe(
     tasks_file = run_path_fn(TASKS_FILE)
     results_file = run_path_fn(RESULTS_FILE)
 
-    crawl_pages = _load_json(crawl_file, [])
-    role_cookies = load_role_cookies(run_path_fn)
-    admin_urls = collect_admin_urls(
+    crawl_pages = load_json(crawl_file, [])
+    role_cookies = load_cookies(run_path_fn)
+    candidates = collect_vertical_candidates(
         crawl_pages,
         include_path_patterns=include_path_patterns,
         limit=limit,
     )
-    tasks = build_vertical_tasks(admin_urls, role_cookies)
+    tasks = build_vertical_tasks(candidates, role_cookies)
 
-    os.makedirs(os.path.dirname(tasks_file) or ".", exist_ok=True)
-    with open(tasks_file, "w", encoding="utf-8") as f:
-        json.dump(tasks, f, ensure_ascii=False, indent=2)
+    save_json(tasks_file, tasks)
 
-    print(f"[BAC] vertical candidates={len(admin_urls)}, tasks={len(tasks)}")
+    scenario_counts: dict[str, int] = {}
+    for candidate in candidates:
+        scenario = candidate.get("scenario", "unknown")
+        scenario_counts[scenario] = scenario_counts.get(scenario, 0) + 1
+
+    print(f"[BAC] vertical candidates={len(candidates)}, tasks={len(tasks)}")
+    for scenario, count in sorted(scenario_counts.items()):
+        print(f"[BAC] scenario {scenario}={count}")
     print(f"[BAC] tasks saved: {tasks_file}")
 
     if not tasks:
-        with open(results_file, "w", encoding="utf-8") as f:
-            json.dump([], f, ensure_ascii=False, indent=2)
+        save_json(results_file, [])
         return []
 
     results = execute(
