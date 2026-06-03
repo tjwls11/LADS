@@ -1,5 +1,6 @@
 import json
 import os
+import time
 
 TASK_LABELS = {
     "crawl":    "크롤링 및 타깃 구성",
@@ -266,7 +267,7 @@ def _task_bac(run_path_fn, emit_progress=None):
 
 
 def _task_misconfig(run_path_fn, target_url, emit_progress=None):
-    from misconfig.checker import run as misconfig_run
+    from misconfig.runner import build_misconfig_results
     from findings import load_findings, save_findings
 
     def _prog(n):
@@ -280,46 +281,30 @@ def _task_misconfig(run_path_fn, target_url, emit_progress=None):
     save_findings(non_misconfig, findings_file)
 
     print(f"[MISCONFIG] target: {target_url}")
-    findings = misconfig_run(
+    results = build_misconfig_results(
         base_url=target_url,
-        output_file=findings_file,
         progress_callback=lambda done, total: _prog(int(done / max(total, 1) * 100)),
-        append=True,
     )
-    confirmed = sum(1 for f in findings if f.get("type") == "MISCONFIG_CONFIRMED")
-    warnings  = sum(1 for f in findings if f.get("type") == "MISCONFIG_WARNING")
+
+    existing_again = load_findings(findings_file)
+    save_findings(existing_again + results, findings_file)
+
+    confirmed = sum(1 for f in results if f.get("type") == "MISCONFIG_CONFIRMED")
+    warnings  = sum(1 for f in results if f.get("type") == "MISCONFIG_WARNING")
     print(f"[MISCONFIG] confirmed={confirmed}, warning={warnings}")
     _prog(100)
 
 
 def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_crawl=False, resume=False, emit_progress=None):
-    import threading
-
     def _prog(n):
         if emit_progress: emit_progress(n)
 
     _prog(2)
-
-    # ── misconfig 병렬 시작 (크롤 의존성 없으므로 즉시 실행) ──
-    _misconfig_results: list[dict] = []
-
-    def _run_misconfig():
-        try:
-            from misconfig.checker import check as misconfig_check
-            print(f"[MISCONFIG] 병렬 시작: {target_url}")
-            results = misconfig_check(target_url)
-            _misconfig_results.extend(results)
-            confirmed = sum(1 for f in results if f.get("type") == "MISCONFIG_CONFIRMED")
-            warnings  = sum(1 for f in results if f.get("type") == "MISCONFIG_WARNING")
-            print(f"[MISCONFIG] 병렬 완료: confirmed={confirmed}, warning={warnings}")
-        except Exception as e:
-            print(f"[MISCONFIG] 오류: {e}")
-
-    misconfig_thread = threading.Thread(target=_run_misconfig, daemon=True)
-    misconfig_thread.start()
+    _total_start = time.perf_counter()
 
     # ── 크롤링 ──
     crawl_done = os.path.exists(run_path_fn("crawl_result.json")) and os.path.exists(run_path_fn("targets.json"))
+    _t = time.perf_counter()
     if resume and crawl_done:
         print("[CRAWL] 이전 크롤링 결과 재사용 (resume)")
         _prog(20)
@@ -329,6 +314,7 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
     else:
         _task_crawl(run_path_fn, target_url, emit_progress)
         _prog(20)
+    print(f"__TIMING__crawl:{time.perf_counter() - _t:.1f}")
 
     if not os.path.exists(run_path_fn("crawl_result.json")):
         print("[ERROR] 크롤링 결과 파일 없음 — 스캔 중단")
@@ -336,6 +322,7 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
 
     # ── 페이로드 ──
     payload_done = os.path.exists(payloads_file)
+    _t = time.perf_counter()
     if resume and payload_done:
         try:
             with open(payloads_file, encoding="utf-8") as _f:
@@ -355,6 +342,7 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
     else:
         _task_payload(payloads_file, targets_file=run_path_fn("targets.json"), emit_progress=emit_progress)
         _prog(30)
+    print(f"__TIMING__payload:{time.perf_counter() - _t:.1f}")
 
     if not os.path.exists(payloads_file):
         print("[ERROR] 페이로드 파일 없음 — 스캔 중단")
@@ -362,12 +350,14 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
 
     # ── 주입 테스트 준비 ──
     probe_done = os.path.exists(run_path_fn("probe_tasks.json"))
+    _t = time.perf_counter()
     if resume and probe_done:
         print("[PROBE] 기존 주입 테스트 작업 재사용 (resume)")
         _prog(35)
     else:
         _task_probe(run_path_fn, payloads_file, payloads_meta_file, emit_progress)
         _prog(35)
+    print(f"__TIMING__probe:{time.perf_counter() - _t:.1f}")
 
     if not os.path.exists(run_path_fn("probe_tasks.json")):
         print("[ERROR] 퍼징 작업 파일 없음 — 스캔 중단")
@@ -375,12 +365,14 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
 
     # ── 실행 ──
     exec_done = os.path.exists(run_path_fn("execution_results.json"))
+    _t = time.perf_counter()
     if resume and exec_done:
         print("[EXEC] 기존 실행 결과 재사용 (resume)")
         _prog(90)
     else:
         _task_execute(run_path_fn, emit_progress)
         _prog(90)
+    print(f"__TIMING__execute:{time.perf_counter() - _t:.1f}")
 
     if not os.path.exists(run_path_fn("execution_results.json")):
         print("[ERROR] 실행 결과 파일 없음 — 스캔 중단")
@@ -392,24 +384,24 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
         f.get("module") != "misconfig"
         for f in load_findings(run_path_fn("findings.json"))
     )
+    _t = time.perf_counter()
     if resume and findings_done:
         print("[VALIDATE] 기존 취약점 판정 결과 재사용 (resume)")
         _prog(95)
     else:
         _task_validate(run_path_fn, emit_progress)
         _prog(95)
+    print(f"__TIMING__validate:{time.perf_counter() - _t:.1f}")
 
     # ── BAC (역할별 접근 통제 검사) ──
+    _t = time.perf_counter()
     _task_bac(run_path_fn, emit_progress)
+    print(f"__TIMING__bac:{time.perf_counter() - _t:.1f}")
 
-    # ── misconfig 결과 병합 ──
-    from findings import load_findings, save_findings
-    print("[MISCONFIG] 병렬 완료 대기 중...")
-    misconfig_thread.join()
-    findings_file = run_path_fn("findings.json")
-    existing = load_findings(findings_file)
-    non_misconfig = [f for f in existing if f.get("module") != "misconfig"]
-    save_findings(non_misconfig + _misconfig_results, findings_file)
-    print(f"[MISCONFIG] 결과 병합 완료: {len(_misconfig_results)}개")
+    # ── misconfig (BAC 끝난 후 직렬 실행) ──
+    _t = time.perf_counter()
+    _task_misconfig(run_path_fn, target_url, emit_progress)
+    print(f"__TIMING__misconfig:{time.perf_counter() - _t:.1f}")
+
+    print(f"__TIMING__total:{time.perf_counter() - _total_start:.1f}")
     _prog(100)
->>>>>>> fd8823ce9794a58c658a4111033bf55b687cbed0

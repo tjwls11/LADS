@@ -31,25 +31,47 @@
 
   {# ── 파이프라인 상태 ── #}
   <div class="rounded border border-surface-line bg-white p-5">
-    <h2 class="mb-4 text-[15px] font-black text-slate-950">파이프라인 완료 상태</h2>
-    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5">
+    <div class="mb-4 flex items-center justify-between">
+      <h2 class="text-[15px] font-black text-slate-950">파이프라인 완료 상태</h2>
+      {% if step_timing.total %}
+      <span class="font-mono text-[12px] text-slate-500">총 소요: <span class="font-black text-slate-800">{{ "%.0f"|format(step_timing.total // 60) }}분 {{ "%.0f"|format(step_timing.total % 60) }}초</span></span>
+      {% endif %}
+    </div>
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-7">
       {% set steps = [
-        ('크롤링',        has_crawl,    'travel_explore'),
-        ('페이로드',      has_payload,  'psychology'),
-        ('주입 테스트',   has_probe,    'radar'),
-        ('실행',          has_exec,     'terminal'),
-        ('취약점 판정',   has_findings, 'analytics'),
+        ('크롤링',      has_crawl,    'travel_explore', 'crawl'),
+        ('페이로드',    has_payload,  'psychology',     'payload'),
+        ('주입 테스트', has_probe,    'radar',          'probe'),
+        ('실행',        has_exec,     'terminal',       'execute'),
+        ('취약점 판정', has_findings, 'analytics',      'validate'),
+        ('BAC',         has_findings, 'shield_person',  'bac'),
+        ('Misconfig',   has_findings, 'security',       'misconfig'),
       ] %}
-      {% for label, done, icon in steps %}
-      <div class="flex items-center gap-3 rounded border px-3 py-3 {% if done %}border-emerald-200 bg-emerald-50{% else %}border-slate-200 bg-slate-50{% endif %}">
-        <span class="material-symbols-outlined text-[20px] shrink-0 {% if done %}text-emerald-600{% else %}text-slate-400{% endif %}">{{ icon }}</span>
+      {% for label, done, icon, key in steps %}
+      {% set elapsed = step_timing.get(key) %}
+      <div class="flex items-center gap-2 rounded border px-3 py-3 {% if done %}border-emerald-200 bg-emerald-50{% else %}border-slate-200 bg-slate-50{% endif %}">
+        <span class="material-symbols-outlined text-[18px] shrink-0 {% if done %}text-emerald-600{% else %}text-slate-400{% endif %}">{{ icon }}</span>
         <div class="min-w-0">
-          <div class="truncate text-[12px] font-extrabold {% if done %}text-emerald-700{% else %}text-slate-500{% endif %}">{{ label }}</div>
-          <div class="font-mono text-[11px] {% if done %}text-emerald-600{% else %}text-slate-400{% endif %}">{% if done %}Done{% else %}—{% endif %}</div>
+          <div class="truncate text-[11px] font-extrabold {% if done %}text-emerald-700{% else %}text-slate-500{% endif %}">{{ label }}</div>
+          {% if elapsed %}
+          <div class="font-mono text-[10px] text-slate-500">
+            {% if elapsed >= 60 %}{{ "%.0f"|format(elapsed // 60) }}m {{ "%.0f"|format(elapsed % 60) }}s
+            {% else %}{{ "%.1f"|format(elapsed) }}s{% endif %}
+          </div>
+          {% else %}
+          <div class="font-mono text-[10px] {% if done %}text-emerald-600{% else %}text-slate-400{% endif %}">{% if done %}Done{% else %}—{% endif %}</div>
+          {% endif %}
         </div>
       </div>
       {% endfor %}
     </div>
+    {% if has_log %}
+    <div class="mt-3 text-right">
+      <a href="/runs/{{ run_id }}/scan.log" class="text-[11px] font-bold text-slate-400 hover:text-slate-700">
+        <span class="material-symbols-outlined align-middle text-[13px]">description</span> 스캔 로그 다운로드
+      </a>
+    </div>
+    {% endif %}
   </div>
 
   {# ── 요약 카드 ── #}

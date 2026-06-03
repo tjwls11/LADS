@@ -127,11 +127,66 @@ _log_buffer:     list[str] = []       # 최근 500줄 보관
 _log_subscribers: list[queue.Queue] = []
 _LOG_BUF_MAX = 500
 
+# ── 로그 파일 / 파이프라인 타이밍 ────────────────────────────────
+_log_file_handle = None
+_step_timing: dict[str, float] = {}   # {"crawl": 12.3, ...}
+
+
+def _open_log_file(run_dir: str) -> None:
+    global _log_file_handle
+    _close_log_file()
+    try:
+        _log_file_handle = open(os.path.join(run_dir, "scan.log"), "w", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _close_log_file() -> None:
+    global _log_file_handle
+    if _log_file_handle:
+        try:
+            _log_file_handle.close()
+        except Exception:
+            pass
+        _log_file_handle = None
+
+
+def _save_timing(run_dir: str) -> None:
+    try:
+        import json as _json
+        with open(os.path.join(run_dir, "timing.json"), "w", encoding="utf-8") as f:
+            _json.dump(_step_timing, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
 def _broadcast(msg: str) -> None:
+    global _step_timing
     with _log_lock:
         _log_buffer.append(msg)
         if len(_log_buffer) > _LOG_BUF_MAX:
             _log_buffer.pop(0)
+
+        # 로그 파일 저장 (__PROGRESS__ 제외, 나머지 전부 기록)
+        if _log_file_handle and not msg.startswith("__PROGRESS__"):
+            try:
+                from datetime import datetime as _dt
+                _log_file_handle.write(f"[{_dt.now().strftime('%H:%M:%S')}] {msg}\n")
+                _log_file_handle.flush()
+            except Exception:
+                pass
+
+        # 파이프라인 타이밍 파싱: __TIMING__step_name:seconds
+        if msg.startswith("__TIMING__"):
+            try:
+                payload = msg[len("__TIMING__"):]
+                step, secs = payload.split(":", 1)
+                _step_timing[step.strip()] = float(secs.strip())
+                if _current_run_id:
+                    _save_timing(os.path.join(RUNS_DIR, _current_run_id))
+            except Exception:
+                pass
+
         for sub in _log_subscribers:
             try:
                 sub.put_nowait(msg)
@@ -275,10 +330,13 @@ def stream_task(task):
         if task == "all" and not skip_crawl and not resume:
             global _current_run_id
             _current_run_id = _make_run_id()
-            os.makedirs(os.path.join(RUNS_DIR, _current_run_id), exist_ok=True)
-            # 새 런 시작 시 로그 버퍼 초기화
+            run_dir = os.path.join(RUNS_DIR, _current_run_id)
+            os.makedirs(run_dir, exist_ok=True)
+            # 새 런 시작 시 로그 버퍼·타이밍 초기화
             with _log_lock:
                 _log_buffer.clear()
+                _step_timing.clear()
+            _open_log_file(run_dir)
 
         def run_in_thread():
             global _running_task
@@ -302,6 +360,7 @@ def stream_task(task):
                 _task_lock.release()
                 _broadcast(f"[{label}] 완료")
                 _broadcast("__DONE__")
+                _close_log_file()
 
         threading.Thread(target=run_in_thread, daemon=True).start()
 
@@ -678,6 +737,14 @@ def run_detail(run_id):
 
     files = set(os.listdir(run_dir))
 
+    step_timing: dict = {}
+    if "timing.json" in files:
+        try:
+            with open(os.path.join(run_dir, "timing.json"), encoding="utf-8") as f:
+                step_timing = json.load(f)
+        except Exception:
+            pass
+
     findings, xss_cnt, sqli_cnt, bac_cnt, misconfig_cnt = [], 0, 0, 0, 0
     if "findings.json" in files:
         try:
@@ -722,6 +789,8 @@ def run_detail(run_id):
         exec_ok=exec_ok,
         exec_timeout=exec_timeout,
         exec_err=exec_err,
+        step_timing=step_timing,
+        has_log="scan.log" in files,
         current_run=_current_run_id,
     )
 
@@ -764,6 +833,15 @@ def download_report(run_id):
         as_attachment=True,
         download_name=f"LADS_{run_id}.pdf",
     )
+
+
+@app.route("/runs/<run_id>/scan.log")
+def download_scan_log(run_id):
+    from flask import send_file
+    log_path = os.path.join(RUNS_DIR, run_id, "scan.log")
+    if not os.path.exists(log_path):
+        return "로그 파일이 없습니다.", 404
+    return send_file(log_path, mimetype="text/plain", as_attachment=True, download_name=f"LADS_{run_id}.log")
 
 
 if __name__ == "__main__":
