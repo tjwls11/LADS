@@ -1,6 +1,18 @@
-import json
 import os
 import time
+from urllib.parse import urlparse
+from dataclasses import asdict
+
+from crawl.auth import make_login, load_cookies, save_cookies
+from crawl.crawler import Crawler
+from crawl.target_builder import build_targets
+from payload.generator import run as generate_run
+from probe.strategy import build_tasks
+from probe.executor import execute
+from analyzer import validate as analyze_results
+from findings import load_findings, save_findings
+from bac.vertical import run_vertical_probe
+from utilities import ensure_parent_dir, load_json, save_json
 
 TASK_LABELS = {
     "crawl":    "크롤링 및 타깃 구성",
@@ -8,15 +20,21 @@ TASK_LABELS = {
     "probe":    "주입 테스트 준비",
     "execute":  "퍼징 실행",
     "validate": "취약점 판정",
-    "bac":      "접근 통제 검사",
     "misconfig": "설정 오류 점검",
+    "bac":      "BAC 수직 권한 상승 테스트",
     "all":      "전체 진단",
 }
 
+# ======
+# 공통
+# ======
+
+def _prog(emit_progress, n):
+    if emit_progress:
+        emit_progress(n)
 
 # 역할별 크롤 결과를 URL 기준으로 병합하고 accessible_by(어떤 역할에서 접근 가능한지) 태깅
 def _merge_crawl_results(role_pages: dict[str, list[dict]]) -> list[dict]:
-    from urllib.parse import urlparse
 
     def _form_sig(form: dict) -> str:
         path = urlparse(form.get("action", "")).path or form.get("action", "")
@@ -38,7 +56,7 @@ def _merge_crawl_results(role_pages: dict[str, list[dict]]) -> list[dict]:
             if status == 200 and role not in url_map[url]["accessible_by"]:
                 url_map[url]["accessible_by"].append(role)
 
-            # 해당 역할에서만 보이는 새 폼 추가 (폼 시그니처 기준 중복 제거)
+            # 이미 저장된 폼 시그니처와 비교해 새 폼만 추가한다
             existing_sigs = {_form_sig(f) for f in url_map[url].get("forms", [])}
             for form in page.get("forms", []):
                 sig = _form_sig(form)
@@ -48,29 +66,24 @@ def _merge_crawl_results(role_pages: dict[str, list[dict]]) -> list[dict]:
 
     return list(url_map.values())
 
+# =====
+# BAC TASKS
+# =====
 
-def _task_crawl(run_path_fn, target_url, emit_progress=None):
-    from dataclasses import asdict
-    from crawl.auth import login_all_roles
-    from crawl.crawler import Crawler
-    from crawl.target_builder import build_targets
-
-    def _prog(n):
-        if emit_progress: emit_progress(n)
-
+def _task_bac_crawl(run_path_fn, target_url, emit_progress=None):
     crawl_file   = run_path_fn("crawl_result.json")
     targets_file = run_path_fn("targets.json")
 
-    # 역할별 세션 쿠키 획득
-    role_sessions = login_all_roles(base_url=target_url)
+    role_sessions = make_login(
+        base_url=target_url,
+        roles=("guest", "member1", "admin"),
+    )
     acquired = [r for r in role_sessions if role_sessions[r] or r == "guest"]
-    print(f"[CRAWL] roles to crawl: {acquired}")
+    print(f"[BAC CRAWL] 세션: {acquired}")
 
-    for role, cookies in role_sessions.items():
-        with open(run_path_fn(f"auth_cookies_{role}.json"), "w", encoding="utf-8") as f:
-            json.dump(cookies, f, ensure_ascii=False, indent=2)
+    ensure_parent_dir(crawl_file)
+    save_cookies(run_path_fn, role_sessions)
 
-    # 역할별 크롤 실행
     role_pages: dict[str, list[dict]] = {}
     n_roles = max(len(role_sessions), 1)
     prog_per_role = 18 // n_roles
@@ -78,116 +91,198 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     for i, (role, cookies) in enumerate(role_sessions.items()):
         if role == "member2":
             continue
+        print(f"[BAC CRAWL] [{role}] start: {target_url}")
+        crawler = Crawler(target_url, init_cookies=cookies)
+
+        base = i * prog_per_role
+        def _crawl_progress(done, total, _base=base):
+            _prog(emit_progress, _base + int(done / max(total, 1) * prog_per_role))
+
+        crawler.crawl(progress_callback=_crawl_progress)
+        crawler.summary()
+        role_pages[role] = [asdict(r) for r in crawler.results]
+        print(f"[BAC CRAWL] [{role}] pages={len(crawler.results)}")
+
+    _prog(emit_progress, 18)
+
+    merged_pages = _merge_crawl_results(role_pages)
+    print(f"[BAC CRAWL] {len(merged_pages)} 페이지 발견됨")
+
+    save_json(crawl_file, merged_pages)
+
+    _prog(emit_progress, 20)
+
+    targets = build_targets(merged_pages)
+    save_json(targets_file, targets)
+    print(f"[BAC CRAWL] 타겟 저장됨: {targets_file} ({len(targets)}개)")
+
+
+def _task_bac_vertical(run_path_fn, target_url=None, emit_progress=None):
+    crawl_file = run_path_fn("crawl_result.json")
+    if not os.path.exists(crawl_file):
+        print(f"[BAC] 크롤링 결과 파일 없음: {crawl_file}")
+        return
+
+    if target_url:
+        print("[BAC] refreshing session cookies before vertical probe")
+        refreshed = make_login(
+            base_url=target_url,
+            roles=("guest", "member1", "admin"),
+        )
+
+        roles_file = run_path_fn("auth_cookies_roles.json")
+        existing: dict = load_json(roles_file, {})
+
+        # 로그인 성공한 role만 덮어쓰고, 실패한 role은 기존 쿠키 유지
+        for role, cookies in refreshed.items():
+            if cookies:
+                existing[role] = cookies
+                print(f"[BAC] {role} 쿠키 갱신됨")
+            elif role not in existing:
+                existing[role] = {}
+
+        save_json(roles_file, existing)
+
+    results = run_vertical_probe(
+        run_path_fn,
+        include_path_patterns=True,
+        progress_callback=lambda done, total: _prog(emit_progress, int(done / max(total, 1) * 100)),
+    )
+    print(f"[BAC] vertical done: {len(results)} results")
+    _prog(emit_progress, 90)
+
+
+
+def _task_bac_stream(run_path_fn, target_url=None, emit_progress=None):
+    # 1. BAC 전용 크롤링 (3세션: guest + member1 + admin)
+    _task_bac_crawl(run_path_fn, target_url,
+                    emit_progress=lambda pct: _prog(emit_progress, int(pct * 20 / 20)))
+
+    # 2. 수직 권한 상승 프로브 (크롤 시 이미 쿠키 갱신됨, 재로그인 불필요)
+    _task_bac_vertical(run_path_fn, target_url=None,
+                       emit_progress=lambda pct: _prog(emit_progress, 20 + int(pct * 70 / 100)))
+
+    bac_results_file = run_path_fn("bac_vertical_results.json")
+    bac_findings_file = run_path_fn("bac_findings.json")
+
+    if not os.path.exists(bac_results_file):
+        print("[BAC] 실행 결과 없음 — 분석 건너뜀")
+        _prog(emit_progress, 100)
+        return
+
+    results = load_json(bac_results_file, [])
+
+    findings = analyze_results(results)
+    save_findings(findings, bac_findings_file)
+    bac_cnt = sum(1 for f in findings if f.get("module") == "bac")
+    print(f"[BAC] 분석 완료: findings={len(findings)}, bac={bac_cnt}")
+    _prog(emit_progress, 100)
+
+
+# =====
+# MAIN TASKS
+# =====
+
+def _task_crawl(run_path_fn, target_url, emit_progress=None):
+    crawl_file   = run_path_fn("crawl_result.json")
+    targets_file = run_path_fn("targets.json")
+
+    # 역할별 세션 쿠키 획득
+    role_sessions = make_login(
+        base_url=target_url,
+        roles=("guest", "member1"),
+    )
+    acquired = [r for r in role_sessions if role_sessions[r] or r == "guest"]
+    print(f"[CRAWL] 현재 로그인 세션: {acquired}")
+
+    save_cookies(run_path_fn, role_sessions)
+
+    # 역할별 크롤 실행
+    role_pages: dict[str, list[dict]] = {}
+    n_roles = max(len(role_sessions), 1)
+    prog_per_role = 18 // n_roles
+
+    for i, (role, cookies) in enumerate(role_sessions.items()):
+        if role in ("member2", "admin"):
+            continue
         print(f"[CRAWL] [{role}] start: {target_url}")
         crawler = Crawler(target_url, init_cookies=cookies)
 
         base = i * prog_per_role
         def _crawl_progress(done, total, _base=base):
-            _prog(_base + int(done / max(total, 1) * prog_per_role))
+            _prog(emit_progress, _base + int(done / max(total, 1) * prog_per_role))
 
         crawler.crawl(progress_callback=_crawl_progress)
         crawler.summary()
         role_pages[role] = [asdict(r) for r in crawler.results]
         print(f"[CRAWL] [{role}] pages={len(crawler.results)}")
 
-    _prog(18)
+    _prog(emit_progress, 18)
 
     # 병합 및 accessible_by 태깅
     merged_pages = _merge_crawl_results(role_pages)
-    print(f"[CRAWL] merged: {len(merged_pages)} unique pages")
+    print(f"[CRAWL] {len(merged_pages)} 페이지 발견됨")
 
-    os.makedirs(os.path.dirname(crawl_file) or ".", exist_ok=True)
-    with open(crawl_file, "w", encoding="utf-8") as f:
-        json.dump(merged_pages, f, ensure_ascii=False, indent=2)
-    print(f"[CRAWL] saved: {crawl_file}")
+    save_json(crawl_file, merged_pages)
+    print(f"[CRAWL] 저장됨: {crawl_file}")
 
-    # 이후 단계(BAC 등)가 auth_cookies.json 하나만 참조하므로 가장 높은 권한 세션으로 유지
-    main_cookies = role_sessions.get("member") or role_sessions.get("admin") or {}
-    if main_cookies:
-        with open(run_path_fn("auth_cookies.json"), "w", encoding="utf-8") as f:
-            json.dump(main_cookies, f, ensure_ascii=False, indent=2)
-        print(f"[CRAWL] auth cookies saved: {len(main_cookies)} cookies")
-
-    _prog(20)
+    _prog(emit_progress, 20)
 
     targets = build_targets(merged_pages)
-    with open(targets_file, "w", encoding="utf-8") as f:
-        json.dump(targets, f, ensure_ascii=False, indent=2)
-    print(f"[CRAWL] targets saved: {targets_file} ({len(targets)})")
+    save_json(targets_file, targets)
+    print(f"[CRAWL] 타겟 정보 저장됨: {targets_file} ({len(targets)})")
 
 
 def _task_payload(payloads_file, targets_file=None, emit_progress=None):
-    from payload.generator import run as generate_run
-
-    def _prog(n):
-        if emit_progress: emit_progress(n)
-
     os.makedirs("results", exist_ok=True)
-    print(f"[PAYLOAD] generate: {payloads_file}")
-    generate_run(out_file=payloads_file, targets_file=targets_file)
-    _prog(30)
+    print(f"[PAYLOAD] 생성됨: {payloads_file}")
+
+    def _payload_cb(idx, total):
+        _prog(emit_progress, 20 + int(idx / max(total, 1) * 10))
+
+    generate_run(out_file=payloads_file, targets_file=targets_file, progress_callback=_payload_cb)
+    _prog(emit_progress,30)
 
 
-def _task_probe(run_path_fn, payloads_file, payloads_meta_file, emit_progress=None):
-    from probe.strategy import build_tasks
-
-    def _prog(n):
-        if emit_progress: emit_progress(n)
-
-    targets_file    = run_path_fn("targets.json")
+def _task_probe(run_path_fn, payloads_file, emit_progress=None):
+    targets_file     = run_path_fn("targets.json")
     probe_tasks_file = run_path_fn("probe_tasks.json")
 
     if not os.path.exists(payloads_file):
-        print(f"[ERROR] missing payload file: {payloads_file}")
+        print(f"[ERROR] 페이로드 파일이 없음: {payloads_file}")
         return
-    if not os.path.exists(payloads_meta_file):
-        print(f"[WARN] missing payload meta file: {payloads_meta_file}")
+    if not os.path.exists(targets_file):
+        print(f"[ERROR] 크롤링한 파일이 없음: {targets_file}")
         return
 
-    with open(payloads_meta_file, encoding="utf-8") as f:
-        points_meta = json.load(f)
-    with open(payloads_file, encoding="utf-8") as f:
-        payloads = json.load(f)
+    payloads = load_json(payloads_file, [])
+    targets = load_json(targets_file, [])
 
-    targets = None
-    if os.path.exists(targets_file):
-        with open(targets_file, encoding="utf-8") as f:
-            targets = json.load(f)
-
-    base_cookies: dict = {}
-    cookies_file = run_path_fn("auth_cookies.json")
-    if os.path.exists(cookies_file):
-        with open(cookies_file, encoding="utf-8") as f:
-            base_cookies = json.load(f)
-        print(f"[PROBE] auth cookies loaded: {len(base_cookies)} cookies")
+    role_cookies = load_cookies(run_path_fn)
+    base_cookie: dict = role_cookies.get("member1") or {}
+    if base_cookie:
+        print(f"[PROBE] 일반 유저 로그인됨")
     else:
-        print("[PROBE] no auth cookies — requests will be unauthenticated")
+        print("[PROBE] 인증 파일 없음. 인증없이 진행")
 
-    tasks = build_tasks(points_meta, payloads, targets, base_cookies=base_cookies)
-    with open(probe_tasks_file, "w", encoding="utf-8") as f:
-        json.dump(tasks, f, ensure_ascii=False, indent=2)
+    tasks = build_tasks(payloads, targets, base_cookie=base_cookie)
+    save_json(probe_tasks_file, tasks)
     print(f"[PROBE] tasks saved: {probe_tasks_file} ({len(tasks)})")
-    _prog(35)
+    _prog(emit_progress, 35)
 
 
 def _task_execute(run_path_fn, emit_progress=None):
-    from probe.executor import execute
-
-    def _prog(n):
-        if emit_progress: emit_progress(n)
-
     probe_tasks_file = run_path_fn("probe_tasks.json")
     exec_file       = run_path_fn("execution_results.json")
 
     if not os.path.exists(probe_tasks_file):
-        print(f"[ERROR] missing probe task file: {probe_tasks_file}")
+        print(f"[ERROR] 주입 작업 파일 없음: {probe_tasks_file}")
         return
 
-    with open(probe_tasks_file, encoding="utf-8") as f:
-        tasks = json.load(f)
+    tasks = load_json(probe_tasks_file, [])
 
     def _execute_progress(done, total):
-        _prog(35 + int(done / max(total, 1) * 55))
+        _prog(emit_progress, 35 + int(done / max(total, 1) * 55))
 
     print(f"[EXEC] start: {len(tasks)} tasks")
     results = execute(tasks, timeout=10, delay=0.0, output_file=exec_file, progress_callback=_execute_progress)
@@ -195,87 +290,37 @@ def _task_execute(run_path_fn, emit_progress=None):
     timeout = sum(1 for r in results if r.get("error") == "timeout")
     err     = sum(1 for r in results if r.get("error") and r.get("error") != "timeout")
     print(f"[EXEC] done: ok={ok}, timeout={timeout}, error={err}")
-    _prog(90)
+    _prog(emit_progress, 90)
 
 
 def _task_validate(run_path_fn, emit_progress=None):
-    from analyzer import run as validate_run
-
-    def _prog(n):
-        if emit_progress: emit_progress(n)
-
     exec_file     = run_path_fn("execution_results.json")
     findings_file = run_path_fn("findings.json")
 
     if not os.path.exists(exec_file):
-        print(f"[ERROR] missing execution result file: {exec_file}")
+        print(f"[ERROR] 실행 결과 파일이 없음: {exec_file}")
         return
+
+    results = load_json(exec_file, [])
 
     def _validate_progress(done, total):
-        _prog(90 + int(done / max(total, 1) * 10))
+        _prog(emit_progress, 90 + int(done / max(total, 1) * 5))
 
-    findings = validate_run(input_file=exec_file, output_file=findings_file, progress_callback=_validate_progress)
-    xss_cnt  = sum(1 for f in findings if "xss" in (f.get("vuln_type") or "").lower())
-    sqli_cnt = sum(1 for f in findings if "sql" in (f.get("vuln_type") or "").lower())
-    print(f"[VALIDATE] done: findings={len(findings)}, xss={xss_cnt}, sqli={sqli_cnt}")
-    _prog(100)
+    findings = analyze_results(results, progress_callback=_validate_progress)
+    save_findings(findings, findings_file)
 
-
-def _task_bac(run_path_fn, emit_progress=None):
-    from bac.runner import build_bac_results
-    from analyzer import validate as analyzer_validate
-    from findings import load_findings, save_findings
-
-    def _prog(n):
-        if emit_progress: emit_progress(n)
-
-    findings_file = run_path_fn("findings.json")
-    bac_results_file = run_path_fn("bac_results.json")
-
-    if not os.path.exists(run_path_fn("crawl_result.json")):
-        print(f"[BAC] missing crawl_result.json — BAC 단계 건너뜀")
-        return
-
-    # 1) crawl 결과 URL을 역할별 쿠키로 재요청해 본문 포함 결과 수집
-    def _bac_progress(done, total):
-        _prog(int(done / max(total, 1) * 80))
-
-    results = build_bac_results(run_path_fn, progress_callback=_bac_progress)
-
-    # 디버깅/재현용으로 원시 결과 저장 (선택적)
-    try:
-        with open(bac_results_file, "w", encoding="utf-8") as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-    if not results:
-        print("[BAC] 재요청 결과 없음 — 판정 생략")
-        _prog(100)
-        return
-
-    # 2) analyzer로 BAC 판정
-    bac_findings = [f for f in analyzer_validate(results) if f.get("module") == "bac"]
-
-    # 3) 기존 findings에서 이전 BAC 결과만 제거하고 새 결과 병합 (재실행 안전)
-    existing = load_findings(findings_file)
-    non_bac = [f for f in existing if f.get("module") != "bac"]
-    save_findings(non_bac + bac_findings, findings_file)
-
-    print(f"[BAC] done: findings={len(bac_findings)}")
-    _prog(100)
+    xss_cnt  = sum(1 for f in findings if f.get("module") == "xss")
+    sqli_cnt = sum(1 for f in findings if f.get("module") == "sqli")
+    bac_cnt  = sum(1 for f in findings if f.get("module") == "bac")
+    print(f"[VALIDATE] done: findings={len(findings)}, xss={xss_cnt}, sqli={sqli_cnt}, bac={bac_cnt}")
+    _prog(emit_progress, 95)
 
 
 def _task_misconfig(run_path_fn, target_url, emit_progress=None):
     from misconfig.runner import build_misconfig_results
-    from findings import load_findings, save_findings
-
-    def _prog(n):
-        if emit_progress: emit_progress(n)
 
     findings_file = run_path_fn("findings.json")
 
-    # 재실행 시 기존 misconfig 결과만 제거하고 xss/sqli 결과는 유지
     existing = load_findings(findings_file)
     non_misconfig = [f for f in existing if f.get("module") != "misconfig"]
     save_findings(non_misconfig, findings_file)
@@ -283,7 +328,7 @@ def _task_misconfig(run_path_fn, target_url, emit_progress=None):
     print(f"[MISCONFIG] target: {target_url}")
     results = build_misconfig_results(
         base_url=target_url,
-        progress_callback=lambda done, total: _prog(int(done / max(total, 1) * 100)),
+        progress_callback=lambda done, total: _prog(emit_progress, 95 + int(done / max(total, 1) * 5)),
     )
 
     existing_again = load_findings(findings_file)
@@ -292,14 +337,11 @@ def _task_misconfig(run_path_fn, target_url, emit_progress=None):
     confirmed = sum(1 for f in results if f.get("type") == "MISCONFIG_CONFIRMED")
     warnings  = sum(1 for f in results if f.get("type") == "MISCONFIG_WARNING")
     print(f"[MISCONFIG] confirmed={confirmed}, warning={warnings}")
-    _prog(100)
+    _prog(emit_progress, 100)
 
 
-def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_crawl=False, resume=False, emit_progress=None):
-    def _prog(n):
-        if emit_progress: emit_progress(n)
-
-    _prog(2)
+def _task_main_stream(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_crawl=False, resume=False, emit_progress=None):
+    _prog(emit_progress, 2)
     _total_start = time.perf_counter()
 
     # ── 크롤링 ──
@@ -307,41 +349,39 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
     _t = time.perf_counter()
     if resume and crawl_done:
         print("[CRAWL] 이전 크롤링 결과 재사용 (resume)")
-        _prog(20)
+        _prog(emit_progress, 20)
     elif skip_crawl:
         print("[CRAWL] 이전 크롤링 결과 재사용")
-        _prog(20)
+        _prog(emit_progress, 20)
     else:
         _task_crawl(run_path_fn, target_url, emit_progress)
-        _prog(20)
+        _prog(emit_progress, 20)
     print(f"__TIMING__crawl:{time.perf_counter() - _t:.1f}")
 
     if not os.path.exists(run_path_fn("crawl_result.json")):
         print("[ERROR] 크롤링 결과 파일 없음 — 스캔 중단")
         return
 
-    # ── 페이로드 ──
+    # --- 페이로드 ---
     payload_done = os.path.exists(payloads_file)
     _t = time.perf_counter()
     if resume and payload_done:
         try:
-            with open(payloads_file, encoding="utf-8") as _f:
-                _cnt = len(json.load(_f))
+            _cnt = len(load_json(payloads_file, []))
         except Exception:
             _cnt = 0
         print(f"[PAYLOAD] 기존 페이로드 재사용 (resume, {_cnt}개)")
-        _prog(30)
+        _prog(emit_progress, 30)
     elif payload_done:
         try:
-            with open(payloads_file, encoding="utf-8") as _f:
-                _cnt = len(json.load(_f))
+            _cnt = len(load_json(payloads_file, []))
         except Exception:
             _cnt = 0
         print(f"[PAYLOAD] 기존 페이로드 재사용 ({_cnt}개) — 새로 생성하려면 파일 삭제 후 재스캔")
-        _prog(30)
+        _prog(emit_progress, 30)
     else:
         _task_payload(payloads_file, targets_file=run_path_fn("targets.json"), emit_progress=emit_progress)
-        _prog(30)
+        _prog(emit_progress, 30)
     print(f"__TIMING__payload:{time.perf_counter() - _t:.1f}")
 
     if not os.path.exists(payloads_file):
@@ -353,10 +393,10 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
     _t = time.perf_counter()
     if resume and probe_done:
         print("[PROBE] 기존 주입 테스트 작업 재사용 (resume)")
-        _prog(35)
+        _prog(emit_progress, 35)
     else:
-        _task_probe(run_path_fn, payloads_file, payloads_meta_file, emit_progress)
-        _prog(35)
+        _task_probe(run_path_fn, payloads_file, emit_progress)
+        _prog(emit_progress, 35)
     print(f"__TIMING__probe:{time.perf_counter() - _t:.1f}")
 
     if not os.path.exists(run_path_fn("probe_tasks.json")):
@@ -368,10 +408,10 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
     _t = time.perf_counter()
     if resume and exec_done:
         print("[EXEC] 기존 실행 결과 재사용 (resume)")
-        _prog(90)
+        _prog(emit_progress, 90)
     else:
         _task_execute(run_path_fn, emit_progress)
-        _prog(90)
+        _prog(emit_progress, 90)
     print(f"__TIMING__execute:{time.perf_counter() - _t:.1f}")
 
     if not os.path.exists(run_path_fn("execution_results.json")):
@@ -379,7 +419,6 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
         return
 
     # ── 취약점 판정 ──
-    from findings import load_findings
     findings_done = any(
         f.get("module") != "misconfig"
         for f in load_findings(run_path_fn("findings.json"))
@@ -387,21 +426,16 @@ def _task_all(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_c
     _t = time.perf_counter()
     if resume and findings_done:
         print("[VALIDATE] 기존 취약점 판정 결과 재사용 (resume)")
-        _prog(95)
+        _prog(emit_progress, 95)
     else:
         _task_validate(run_path_fn, emit_progress)
-        _prog(95)
+        _prog(emit_progress, 95)
     print(f"__TIMING__validate:{time.perf_counter() - _t:.1f}")
 
-    # ── BAC (역할별 접근 통제 검사) ──
-    _t = time.perf_counter()
-    _task_bac(run_path_fn, emit_progress)
-    print(f"__TIMING__bac:{time.perf_counter() - _t:.1f}")
-
-    # ── misconfig (BAC 끝난 후 직렬 실행) ──
+    # ── misconfig (직렬 실행) ──
     _t = time.perf_counter()
     _task_misconfig(run_path_fn, target_url, emit_progress)
     print(f"__TIMING__misconfig:{time.perf_counter() - _t:.1f}")
 
     print(f"__TIMING__total:{time.perf_counter() - _total_start:.1f}")
-    _prog(100)
+    _prog(emit_progress, 100)

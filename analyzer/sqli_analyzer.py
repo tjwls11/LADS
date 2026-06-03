@@ -4,9 +4,8 @@ import re
 from collections import defaultdict
 from typing import Optional
 
-from findings import VERDICT_CONFIRMED, VERDICT_SUSPECTED, VERDICT_CANDIDATE
-
 SLEEP_THRESHOLD       = 4.5
+BOOL_SIGNAL_MIN       = 0.05
 BOOL_GROUP_THRESHOLD  = 0.05
 ORDERBY_DIFF_THRES    = 0.10
 
@@ -58,6 +57,7 @@ _BOOL_PROBE = re.compile(
 )
 
 _ORDERBY_INJECT = re.compile(r"order\s+by\s+(?:\d+|\(|\w+\s*,)", re.IGNORECASE)
+_ORDERBY_NUM = re.compile(r"order\s+by\s+(\d+)", re.IGNORECASE)
 
 
 def _is_group_candidate(payload: str) -> bool:
@@ -123,33 +123,37 @@ def _check_error_based(body: str) -> Optional[str]:
     return None
 
 
-# ── 단건 판정 ─────────────────────────────────────────────────────
-# 반환: (취약여부, evidence, verdict)
-#  - 단건은 시그니처가 명확하므로 confirmed 로 본다.
-def validate_sqli(test_result: dict) -> tuple[bool, str, str]:
+def validate_sqli(test_result: dict) -> tuple[bool, str]:
     if not test_result:
-        return False, "검증 불가 (입력 없음)", VERDICT_CANDIDATE
+        return False, "검증 불가 (입력 없음)"
 
     resp = _extract_response(test_result)
     if not resp["body"] and resp["elapsed"] == 0.0:
-        return False, "검증 불가 (응답 데이터 누락)", VERDICT_CANDIDATE
+        return False, "검증 불가 (응답 데이터 누락)"
 
     msg = _check_time_based(resp["elapsed"])
     if msg:
-        return True, msg, VERDICT_CONFIRMED
+        return True, msg
 
     payload = test_result.get("payload") or ""
     if _is_group_candidate(payload):
-        return False, "그룹 분석 대상 (Phase 2로 위임)", VERDICT_CANDIDATE
+        return False, "그룹 분석 대상 (Phase 2로 위임)"
 
     msg = _check_error_based(resp["body"])
     if msg:
-        return True, msg, VERDICT_CONFIRMED
+        return True, msg
 
-    return False, "안전함 (SQLi 시그니처 미검출)", VERDICT_CANDIDATE
+    return False, "안전함 (SQLi 시그니처 미검출)"
 
 
 def detect_boolean_group(results: list[dict]) -> list[dict]:
+    """
+    판정 단계:
+      [confirmed] TRUE+FALSE 짝 있고 응답 차이 >= 5%
+      [suspected] TRUE+FALSE 짝 있고 응답 동일 + DB 에러 시그니처 동반
+      [candidate] TRUE+FALSE 짝 있지만 응답 동일, DB 에러 없음
+      [candidate] TRUE 또는 FALSE 한쪽만 있음
+    """
     sqli_results = [
         r for r in results
         if not r.get("error")
@@ -187,7 +191,7 @@ def detect_boolean_group(results: list[dict]) -> list[dict]:
                     f"diff={diff:.1%} ({direction})"
                 )
                 best = max(true_items, key=_body_length)
-                detected.append({"result": best, "evidence": evidence, "verdict": VERDICT_CONFIRMED})
+                detected.append({"result": best, "evidence": evidence})
                 continue
 
             sample_body = (true_items[0].get("response_body") or "").lower()
@@ -198,16 +202,14 @@ def detect_boolean_group(results: list[dict]) -> list[dict]:
                     f"응답 크기 동일 (diff={diff:.1%}) + DB 에러 시그니처 동반 → "
                     f"CMS 동일 에러 페이지 환경 (그누보드 등)"
                 )
-                verdict = VERDICT_SUSPECTED
             else:
                 evidence = (
                     f"Boolean SQLi candidate: "
                     f"true {len(true_items)}개 / false {len(false_items)}개 시도, "
                     f"응답 동일 (diff={diff:.1%}), 수동 확인 필요"
                 )
-                verdict = VERDICT_CANDIDATE
             best = true_items[0]
-            detected.append({"result": best, "evidence": evidence, "verdict": verdict})
+            detected.append({"result": best, "evidence": evidence})
             continue
 
         candidate_items = true_items or false_items
@@ -221,7 +223,7 @@ def detect_boolean_group(results: list[dict]) -> list[dict]:
                 f"짝 페이로드 부재로 응답 비교 불가{error_note}"
             )
             best = candidate_items[0]
-            detected.append({"result": best, "evidence": evidence, "verdict": VERDICT_CANDIDATE})
+            detected.append({"result": best, "evidence": evidence})
 
     return detected
 
@@ -262,22 +264,19 @@ def detect_probe_group(results: list[dict]) -> list[dict]:
                 f"Boolean Probe SQLi (confirmed): {len(group)}개 정찰 페이로드 응답 분산 "
                 f"(min={min_len}b, max={max_len_v}b, diff={diff:.1%})"
             )
-            verdict = VERDICT_CONFIRMED
         elif has_error:
             evidence = (
                 f"Boolean Probe SQLi (suspected): {len(group)}개 정찰 페이로드 시도, "
                 f"응답 동일하지만 DB 에러 시그니처 동반"
             )
-            verdict = VERDICT_SUSPECTED
         else:
             evidence = (
                 f"Boolean Probe SQLi candidate: {len(group)}개 정찰 페이로드 시도 "
                 f"(ASCII/SUBSTRING/MID/REGEXP 등), 응답 차이 없음"
             )
-            verdict = VERDICT_CANDIDATE
 
         best = max(group, key=_body_length)
-        detected.append({"result": best, "evidence": evidence, "verdict": verdict})
+        detected.append({"result": best, "evidence": evidence})
 
     return detected
 
@@ -309,7 +308,7 @@ def detect_orderby_group(results: list[dict]) -> list[dict]:
                     f"ORDER BY SQLi candidate: 단일 페이로드 시도, "
                     f"비교용 baseline 부족{error_note}"
                 )
-                detected.append({"result": group[0], "evidence": evidence, "verdict": VERDICT_CANDIDATE})
+                detected.append({"result": group[0], "evidence": evidence})
             continue
 
         lengths = [_body_length(r) for r in group]
@@ -331,7 +330,7 @@ def detect_orderby_group(results: list[dict]) -> list[dict]:
                 f"(min={min_len}b, max={max_len_v}b, diff={diff:.1%}){evidence_extra}"
             )
             best = max(group, key=_body_length)
-            detected.append({"result": best, "evidence": evidence, "verdict": VERDICT_CONFIRMED})
+            detected.append({"result": best, "evidence": evidence})
         else:
             sample_body = (group[0].get("response_body") or "").lower()
             db_note = " + DB 에러 동반" if _has_db_error(sample_body) else ""
@@ -340,6 +339,6 @@ def detect_orderby_group(results: list[dict]) -> list[dict]:
                 f"응답 동일 (diff={diff:.1%}){db_note}"
             )
             best = group[0]
-            detected.append({"result": best, "evidence": evidence, "verdict": VERDICT_CANDIDATE})
+            detected.append({"result": best, "evidence": evidence})
 
     return detected

@@ -1,5 +1,6 @@
 import re
 from typing import List, Dict
+from payload.parser import parse
 
 # 허용된 취약점 타입
 ALLOWED_TYPES = {
@@ -152,7 +153,6 @@ def report(original: List, filtered: List, rejected: List):
 
 
 if __name__ == "__main__":
-    from payload.parser import parse
 
     mock_llm_output = """
 SQLI_STRING | auth_bypass | admin'-- -
