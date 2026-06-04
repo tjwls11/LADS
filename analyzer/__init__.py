@@ -67,6 +67,7 @@ def _make_finding(r: dict, evidence: str) -> dict:
     )
     f["id"]          = r.get("id")
     f["point"]       = r.get("point")
+    f["task_group_id"] = r.get("task_group_id")
     f["inject_mode"] = r.get("inject_mode")
     f["elapsed"]     = r.get("elapsed") or 0.0
     f["role"]        = meta.get("role")
