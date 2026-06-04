@@ -6,7 +6,6 @@ from dataclasses import asdict
 from crawl.auth import make_login, load_cookies, save_cookies
 from crawl.crawler import Crawler
 from crawl.target_builder import build_targets
-from payload.generator import run as generate_run
 from probe.strategy import build_tasks
 from probe.executor import execute
 from analyzer import validate as analyze_results
@@ -16,7 +15,6 @@ from utilities import ensure_parent_dir, load_json, save_json
 
 TASK_LABELS = {
     "crawl":    "크롤링 및 타깃 구성",
-    "payload":  "페이로드 생성",
     "probe":    "주입 테스트 준비",
     "execute":  "퍼징 실행",
     "validate": "취약점 판정",
@@ -237,29 +235,14 @@ def _task_crawl(run_path_fn, target_url, emit_progress=None):
     print(f"[CRAWL] 타겟 정보 저장됨: {targets_file} ({len(targets)})")
 
 
-def _task_payload(payloads_file, targets_file=None, emit_progress=None):
-    os.makedirs("results", exist_ok=True)
-    print(f"[PAYLOAD] 생성됨: {payloads_file}")
-
-    def _payload_cb(idx, total):
-        _prog(emit_progress, 20 + int(idx / max(total, 1) * 10))
-
-    generate_run(out_file=payloads_file, targets_file=targets_file, progress_callback=_payload_cb)
-    _prog(emit_progress,30)
-
-
-def _task_probe(run_path_fn, payloads_file, emit_progress=None):
+def _task_probe(run_path_fn, emit_progress=None):
     targets_file     = run_path_fn("targets.json")
     probe_tasks_file = run_path_fn("probe_tasks.json")
 
-    if not os.path.exists(payloads_file):
-        print(f"[ERROR] 페이로드 파일이 없음: {payloads_file}")
-        return
     if not os.path.exists(targets_file):
         print(f"[ERROR] 크롤링한 파일이 없음: {targets_file}")
         return
 
-    payloads = load_json(payloads_file, [])
     targets = load_json(targets_file, [])
 
     role_cookies = load_cookies(run_path_fn)
@@ -269,7 +252,7 @@ def _task_probe(run_path_fn, payloads_file, emit_progress=None):
     else:
         print("[PROBE] 인증 파일 없음. 인증없이 진행")
 
-    tasks = build_tasks(payloads, targets, base_cookie=base_cookie)
+    tasks = build_tasks(targets, base_cookie=base_cookie)
     save_json(probe_tasks_file, tasks)
     print(f"[PROBE] tasks saved: {probe_tasks_file} ({len(tasks)})")
     _prog(emit_progress, 35)
@@ -316,7 +299,7 @@ def _task_validate(run_path_fn, emit_progress=None):
     xss_cnt  = sum(1 for f in findings if f.get("module") == "xss")
     sqli_cnt = sum(1 for f in findings if f.get("module") == "sqli")
     bac_cnt  = sum(1 for f in findings if f.get("module") == "bac")
-    print(f"[VALIDATE] done: findings={len(findings)}, xss={xss_cnt}, sqli={sqli_cnt}, bac={bac_cnt}")
+    print(f"[VALIDATE] done: findings={len(findings)}, xss={xss_cnt}, sqli={sqli_cnt}")
     _prog(emit_progress, 95)
 
 
@@ -344,7 +327,7 @@ def _task_misconfig(run_path_fn, target_url, emit_progress=None):
     _prog(emit_progress, 100)
 
 
-def _task_main_stream(run_path_fn, target_url, payloads_file, payloads_meta_file, skip_crawl=False, resume=False, emit_progress=None):
+def _task_main_stream(run_path_fn, target_url, skip_crawl=False, resume=False, emit_progress=None):
     _prog(emit_progress, 2)
     _total_start = time.perf_counter()
 
@@ -366,40 +349,14 @@ def _task_main_stream(run_path_fn, target_url, payloads_file, payloads_meta_file
         print("[ERROR] 크롤링 결과 파일 없음 — 스캔 중단")
         return
 
-    # --- 페이로드 ---
-    payload_done = os.path.exists(payloads_file)
-    _t = time.perf_counter()
-    if resume and payload_done:
-        try:
-            _cnt = len(load_json(payloads_file, []))
-        except Exception:
-            _cnt = 0
-        print(f"[PAYLOAD] 기존 페이로드 재사용 (resume, {_cnt}개)")
-        _prog(emit_progress, 30)
-    elif payload_done:
-        try:
-            _cnt = len(load_json(payloads_file, []))
-        except Exception:
-            _cnt = 0
-        print(f"[PAYLOAD] 기존 페이로드 재사용 ({_cnt}개) — 새로 생성하려면 파일 삭제 후 재스캔")
-        _prog(emit_progress, 30)
-    else:
-        _task_payload(payloads_file, targets_file=run_path_fn("targets.json"), emit_progress=emit_progress)
-        _prog(emit_progress, 30)
-    print(f"__TIMING__payload:{time.perf_counter() - _t:.1f}")
-
-    if not os.path.exists(payloads_file):
-        print("[ERROR] 페이로드 파일 없음 — 스캔 중단")
-        return
-
-    # ── 주입 테스트 준비 ──
+    # --- 주입 테스트 준비 ---
     probe_done = os.path.exists(run_path_fn("probe_tasks.json"))
     _t = time.perf_counter()
     if resume and probe_done:
         print("[PROBE] 기존 주입 테스트 작업 재사용 (resume)")
         _prog(emit_progress, 35)
     else:
-        _task_probe(run_path_fn, payloads_file, emit_progress)
+        _task_probe(run_path_fn, emit_progress)
         _prog(emit_progress, 35)
     print(f"__TIMING__probe:{time.perf_counter() - _t:.1f}")
 
