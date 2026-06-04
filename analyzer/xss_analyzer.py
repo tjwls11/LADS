@@ -7,12 +7,10 @@ from .xss_context import (
     CTX_SAFE_TAG, CTX_COMMENT, CTX_URL_ATTR, CTX_EVENT_ATTR,
     CTX_SCRIPT, CTX_HTML_TEXT, CTX_ATTR, CTX_UNKNOWN,
 )
-
-# finding type 상수 — findings.py에 A 담당자가 추가 예정
-XSS_SUSPICIOUS       = "XSS_SUSPICIOUS"
-XSS_REFLECTED        = "XSS_REFLECTED"
-XSS_STORED_REFLECTED = "XSS_STORED_REFLECTED"
-XSS_VERIFIED         = "XSS_VERIFIED"  # Playwright 확인 시에만 사용, 현재 미구현
+from findings import (
+    XSS_SUSPICIOUS, XSS_REFLECTED, XSS_STORED_REFLECTED,
+    XSS_VERIFIED,  # Playwright 확인 시에만 사용, 현재 미구현
+)
 
 XSS_MARKERS = (
     "onerror=alert",
