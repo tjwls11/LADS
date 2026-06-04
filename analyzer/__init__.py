@@ -8,8 +8,9 @@ from findings import (
     make_finding,
     sqli_finding_from_verdict,
     MODULE_XSS, MODULE_SQLI, MODULE_BAC,
-    XSS_CONFIRMED, SQLI_CONFIRMED, BAC_SUSPECTED_MEDIUM,
-    HIGH,
+    XSS_VERIFIED, XSS_REFLECTED, XSS_SUSPICIOUS,
+    SQLI_CONFIRMED, SQLI_SUSPECTED, SQLI_CANDIDATE, BAC_SUSPECTED_MEDIUM,
+    HIGH, MEDIUM, LOW,
 )
 
 __all__ = [
@@ -25,12 +26,12 @@ def _vuln_type(r: dict) -> str:
 
 def _derive_module_type(vt: str) -> tuple[str, str]:
     if "xss" in vt:
-        return MODULE_XSS, XSS_CONFIRMED
+        return MODULE_XSS, XSS_REFLECTED
     if "sqli" in vt or "sql" in vt:
-        return MODULE_SQLI, SQLI_CONFIRMED
+        return MODULE_SQLI, SQLI_CANDIDATE
     if "bac" in vt or "broken_access" in vt or "auth" in vt:
         return MODULE_BAC, BAC_SUSPECTED_MEDIUM
-    return MODULE_XSS, XSS_CONFIRMED
+    return MODULE_XSS, XSS_SUSPICIOUS
 
 
 def _derive_category(vt: str, evidence: str) -> str:
@@ -48,11 +49,49 @@ def _derive_category(vt: str, evidence: str) -> str:
     return "unknown"
 
 
+def _derive_sqli_type_confidence(evidence: str) -> tuple[str, str]:
+    ev = evidence.lower()
+    if "candidate" in ev:
+        return SQLI_CANDIDATE, LOW
+    if "suspected" in ev:
+        return SQLI_SUSPECTED, MEDIUM
+    if "(confirmed)" in ev or "union-based" in ev:
+        return SQLI_CONFIRMED, HIGH
+    if "time-based" in ev or "error-based" in ev:
+        return SQLI_SUSPECTED, MEDIUM
+    return SQLI_CANDIDATE, LOW
+
+
+def _derive_xss_type_confidence(r: dict, evidence: str) -> tuple[str, str]:
+    ev = evidence.lower()
+    context = ((r.get("xss_context") or "")).lower()
+    safe_contexts = ("textarea", "title", "comment", "style", "noscript", "safe_tag")
+
+    if "verified" in ev or "playwright" in ev:
+        return XSS_VERIFIED, HIGH
+    if any(ctx in context for ctx in safe_contexts):
+        return XSS_SUSPICIOUS, LOW
+    if "payload" in ev or "페이로드" in ev:
+        return XSS_REFLECTED, MEDIUM
+    if "marker" in ev or "마커" in ev:
+        return XSS_REFLECTED, MEDIUM
+    return XSS_SUSPICIOUS, LOW
+
+
+def _derive_type_confidence(module: str, type_: str, r: dict, evidence: str) -> tuple[str, str]:
+    if module == MODULE_SQLI:
+        return _derive_sqli_type_confidence(evidence)
+    if module == MODULE_XSS:
+        return _derive_xss_type_confidence(r, evidence)
+    return type_, HIGH
+
+
 def _make_finding(r: dict, evidence: str) -> dict:
     meta = r.get("meta") or {}
     vt   = (meta.get("vuln_type") or "").lower()
     module, type_ = _derive_module_type(vt)
     category      = _derive_category(vt, evidence)
+    type_, confidence = _derive_type_confidence(module, type_, r, evidence)
 
     f = make_finding(
         module=module,
@@ -62,7 +101,7 @@ def _make_finding(r: dict, evidence: str) -> dict:
         param=r.get("inject_param"),
         payload=r.get("payload") or "",
         status=r.get("status"),
-        confidence=HIGH,
+        confidence=confidence,
         evidence=evidence,
     )
     f["id"]          = r.get("id")
@@ -89,7 +128,7 @@ def _validate_single(r: dict) -> tuple[bool, str]:
     return validate_sqli(r)
 
 
-def _handle_sqli(raw, rid: str | None, findings: list[dict], found_ids: set) -> None:
+def _handle_sqli(raw, r: dict, rid: str | None, findings: list[dict], found_ids: set) -> None:
     if rid in found_ids:
         return
     if isinstance(raw, dict):
@@ -99,7 +138,7 @@ def _handle_sqli(raw, rid: str | None, findings: list[dict], found_ids: set) -> 
             if rid:
                 found_ids.add(rid)
     elif isinstance(raw, tuple) and raw[0]:
-        findings.append(_make_finding(raw[1], raw[1]))
+        findings.append(_make_finding(r, raw[1]))
         if rid:
             found_ids.add(rid)
 
@@ -117,7 +156,7 @@ def validate(results: list[dict], progress_callback=None) -> list[dict]:
 
         vt = _vuln_type(r)
         if "sqli" in vt or "sql" in vt:
-            _handle_sqli(validate_sqli(r), r.get("id"), findings, found_ids)
+            _handle_sqli(validate_sqli(r), r, r.get("id"), findings, found_ids)
         else:
             ok, evidence = _validate_single(r)
             if ok:
@@ -127,7 +166,7 @@ def validate(results: list[dict], progress_callback=None) -> list[dict]:
     for detector in [detect_boolean_group, detect_probe_group, detect_orderby_group, detect_bac_group]:
         for item in detector(results):
             if isinstance(item, dict) and "verdict" in item:
-                _handle_sqli(item, item.get("id"), findings, found_ids)
+                _handle_sqli(item, item, item.get("id"), findings, found_ids)
                 continue
             r        = item["result"]
             evidence = item["evidence"]
