@@ -6,6 +6,7 @@ from .bac_analyzer  import validate_bac, detect_bac_group
 from utilities import load_json, save_json
 from findings import (
     make_finding,
+    sqli_finding_from_verdict,
     MODULE_XSS, MODULE_SQLI, MODULE_BAC,
     XSS_CONFIRMED, SQLI_CONFIRMED, BAC_SUSPECTED_MEDIUM,
     HIGH,
@@ -66,6 +67,7 @@ def _make_finding(r: dict, evidence: str) -> dict:
     )
     f["id"]          = r.get("id")
     f["point"]       = r.get("point")
+    f["task_group_id"] = r.get("task_group_id")
     f["inject_mode"] = r.get("inject_mode")
     f["elapsed"]     = r.get("elapsed") or 0.0
     f["role"]        = meta.get("role")
@@ -87,6 +89,21 @@ def _validate_single(r: dict) -> tuple[bool, str]:
     return validate_sqli(r)
 
 
+def _handle_sqli(raw, rid: str | None, findings: list[dict], found_ids: set) -> None:
+    if rid in found_ids:
+        return
+    if isinstance(raw, dict):
+        finding = sqli_finding_from_verdict(raw)
+        if finding:
+            findings.append(finding)
+            if rid:
+                found_ids.add(rid)
+    elif isinstance(raw, tuple) and raw[0]:
+        findings.append(_make_finding(raw[1], raw[1]))
+        if rid:
+            found_ids.add(rid)
+
+
 def validate(results: list[dict], progress_callback=None) -> list[dict]:
     findings: list[dict] = []
     found_ids: set = set()
@@ -97,14 +114,21 @@ def validate(results: list[dict], progress_callback=None) -> list[dict]:
             progress_callback(idx + 1, total)
         if r.get("error") or not r.get("response_body"):
             continue
-        ok, evidence = _validate_single(r)
-        if ok:
-            findings.append(_make_finding(r, evidence))
-            found_ids.add(r.get("id"))
 
-    # Phase 2: 그룹 분석
+        vt = _vuln_type(r)
+        if "sqli" in vt or "sql" in vt:
+            _handle_sqli(validate_sqli(r), r.get("id"), findings, found_ids)
+        else:
+            ok, evidence = _validate_single(r)
+            if ok:
+                findings.append(_make_finding(r, evidence))
+                found_ids.add(r.get("id"))
+
     for detector in [detect_boolean_group, detect_probe_group, detect_orderby_group, detect_bac_group]:
         for item in detector(results):
+            if isinstance(item, dict) and "verdict" in item:
+                _handle_sqli(item, item.get("id"), findings, found_ids)
+                continue
             r        = item["result"]
             evidence = item["evidence"]
             if r.get("id") in found_ids:

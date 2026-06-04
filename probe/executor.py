@@ -92,10 +92,12 @@ def execute(
         base: dict[str, Any] = {
             "id": t.get("id"),
             "point": point,
+            "task_group_id": t.get("task_group_id"),
             "payload": payload,
             "inject_mode": inject_mode,
             "inject_location": inject_location,
             "inject_param": inject_param,
+            "base_value": t.get("base_value"),
             "meta": t.get("meta") or {},
             "error": None,
         }

@@ -14,7 +14,17 @@ FINDINGS_FILE = os.getenv("FINDINGS_FILE", "results/findings.json")
 
 # ── type 상수 ──────────────────────────────────────────────
 # SQLi
-SQLI_CONFIRMED       = "SQLI_CONFIRMED"
+SQLI_CONFIRMED      = "SQLI_CONFIRMED"
+SQLI_SUSPECTED      = "SQLI_SUSPECTED"
+SQLI_CANDIDATE      = "SQLI_CANDIDATE"
+SQLI_INFORMATIONAL  = "SQLI_INFORMATIONAL"
+
+_SQLI_VERDICT_TYPE: dict[str, str] = {
+    "confirmed":     SQLI_CONFIRMED,
+    "suspected":     SQLI_SUSPECTED,
+    "candidate":     SQLI_CANDIDATE,
+    "informational": SQLI_INFORMATIONAL,
+}
 
 # XSS
 XSS_CONFIRMED        = "XSS_CONFIRMED"
@@ -85,6 +95,35 @@ def make_finding(
     if extra:
         finding["extra"] = extra
     return finding
+
+
+def sqli_finding_from_verdict(verdict: dict) -> dict | None:
+    v = (verdict.get("verdict") or "informational").lower()
+    if v == "informational":
+        return None
+
+    evidence  = verdict.get("evidence") or {}
+    target    = evidence.get("target") or {}
+    requests  = evidence.get("requests") or []
+    attack_req = next((r for r in requests if r.get("role") == "attack"), {})
+
+    return make_finding(
+        module=MODULE_SQLI,
+        type=_SQLI_VERDICT_TYPE.get(v, SQLI_CANDIDATE),
+        category=verdict.get("category") or "unknown",
+        url=target.get("url") or "",
+        param=target.get("param"),
+        payload=attack_req.get("payload"),
+        status=attack_req.get("status"),
+        confidence=(verdict.get("confidence") or LOW).lower(),
+        evidence=verdict.get("reason") or "",
+        extra={
+            "verdict":       v,
+            "title":         verdict.get("title") or "",
+            "task_group_id": verdict.get("task_group_id") or "",
+            "evidence":      evidence,
+        },
+    )
 
 
 # ── 모듈별 헬퍼 ───────────────────────────────────────────
