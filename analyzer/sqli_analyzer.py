@@ -105,6 +105,73 @@ def _group_key(r: dict, fallback_category: str) -> tuple | str:
     )
 
 
+# 응답 시간을 밀리초 단위로 반환
+def _elapsed_ms(r: dict) -> int:
+    elapsed = float(r.get("elapsed") or 0.0)
+    return int(round(elapsed * 1000))
+
+
+# 요청 결과의 역할명을 반환 
+# 예: "attack", "baseline", "control" 등, meta.role이 없으면 "attack"으로 기본값 사용
+def _result_role(r: dict, default: str = "attack") -> str:
+    meta = r.get("meta") or {}
+    return meta.get("role") or default
+
+
+# 단일 요청 결과를 evidence.requests 항목으로 변환하여 반환
+def _request_evidence(r: dict, default_role: str = "attack") -> dict:
+    return {
+        "role": _result_role(r, default_role),
+        "value": r.get("base_value"),
+        "payload": r.get("payload"),
+        "status": r.get("status"),
+        "length": r.get("length") if r.get("length") is not None else _body_length(r),
+        "elapsed_ms": _elapsed_ms(r),
+    }
+
+
+# 그룹의 요청 결과들을 evidence.requests 목록으로 반환
+def _requests_evidence(group: list[dict], default_role: str = "attack") -> list[dict]:
+    return [_request_evidence(r, default_role) for r in group]
+
+
+# evidence.target 영역을 생성하여 반환
+def _target_evidence(r: dict) -> dict:
+    return {
+        "url": r.get("url") or "",
+        "method": r.get("method") or "GET",
+        "param": r.get("inject_param"),
+        "inject_mode": r.get("inject_mode") or "replace",
+    }
+
+
+# detector 판정 결과 구조를 생성하여 반환
+def _build_decision(
+    result: dict,
+    group: list[dict],
+    category: str,
+    verdict: str,
+    confidence: str,
+    reason: str,
+    extra_evidence: dict | None = None,
+) -> dict:
+    evidence = {
+        "target": _target_evidence(result),
+        "requests": _requests_evidence(group),
+    }
+    if extra_evidence:
+        evidence.update(extra_evidence)
+
+    return {
+        "verdict": verdict,
+        "confidence": confidence,
+        "category": category,
+        "reason": reason,
+        "evidence": evidence,
+        "task_group_id": result.get("task_group_id"),
+    }
+
+
 def _body_length(r: dict) -> int:
     body = r.get("response_body") or ""
     return len(body)
