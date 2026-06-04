@@ -27,7 +27,10 @@ _SQLI_VERDICT_TYPE: dict[str, str] = {
 }
 
 # XSS
+XSS_VERIFIED         = "XSS_VERIFIED"
 XSS_CONFIRMED        = "XSS_CONFIRMED"
+XSS_REFLECTED        = "XSS_REFLECTED"
+XSS_SUSPICIOUS       = "XSS_SUSPICIOUS"
 
 # BAC
 BAC_SUSPECTED_LOW    = "BAC_SUSPECTED_LOW"
@@ -135,12 +138,13 @@ def sqli_finding(
     payload:   str,
     status:    int,
     evidence:  str,
-    confidence: str = HIGH,
+    confidence: str = MEDIUM,
+    finding_type: str = SQLI_SUSPECTED,
 ) -> dict:
     """SQLi finding 생성 헬퍼"""
     return make_finding(
         module=MODULE_SQLI,
-        type=SQLI_CONFIRMED,
+        type=finding_type,
         category=category,
         url=url,
         param=param,
@@ -158,12 +162,13 @@ def xss_finding(
     payload:   str,
     status:    int,
     evidence:  str,
-    confidence: str = HIGH,
+    confidence: str = MEDIUM,
+    finding_type: str = XSS_REFLECTED,
 ) -> dict:
     """XSS finding 생성 헬퍼"""
     return make_finding(
         module=MODULE_XSS,
-        type=XSS_CONFIRMED,
+        type=finding_type,
         category=category,
         url=url,
         param=param,
