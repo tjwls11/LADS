@@ -42,7 +42,7 @@ def _derive_module_type(vt: str) -> tuple[str, str]:
     return MODULE_XSS, XSS_SUSPICIOUS
 
 
-def _derive_category(vt: str, evidence: str) -> str:
+def _derive_category(vt: str, evidence: str) -> str: # orderby는요?
     ev = evidence.lower()
     if "time" in ev:
         return "time_based"
@@ -63,8 +63,6 @@ def _derive_sqli_type_confidence(evidence: str) -> tuple[str, str]:
         return SQLI_CANDIDATE, LOW
     if "suspected" in ev:
         return SQLI_SUSPECTED, MEDIUM
-    if "(confirmed)" in ev or "union-based" in ev:
-        return SQLI_CONFIRMED, HIGH
     if "time-based" in ev or "error-based" in ev:
         return SQLI_SUSPECTED, MEDIUM
     return SQLI_CANDIDATE, LOW

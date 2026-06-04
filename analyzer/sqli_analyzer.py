@@ -119,7 +119,7 @@ def _elapsed_ms(r: dict) -> int:
 
 
 # 요청 결과의 역할명을 반환 
-# 예: "attack", "baseline", "control" 등, meta.role이 없으면 "attack"으로 기본값 사용
+# 예: "attack", "baseline", "control" 등, meta.role이 없으면 "attack" 기본값 사용 있음
 def _result_role(r: dict, default: str = "attack") -> str:
     meta = r.get("meta") or {}
     return meta.get("role") or default
@@ -134,6 +134,9 @@ def _request_evidence(r: dict, default_role: str = "attack") -> dict:
         "status": r.get("status"),
         "length": r.get("length") if r.get("length") is not None else _body_length(r),
         "elapsed_ms": _elapsed_ms(r),
+        "repeat_index": r.get("repeat_index", 1),
+        "repeat_total": r.get("repeat_total", 1),
+        "reproduction_key": r.get("reproduction_key"),
     }
 
 
@@ -182,18 +185,20 @@ def _build_decision(
     }
 
 
+# 응답 본문 길이를 반환
 def _body_length(r: dict) -> int:
     body = r.get("response_body") or ""
     return len(body)
 
 
+# 응답 본문에 DB 에러 키워드가 있는지 반환
 def _has_db_error(body: str) -> bool:
     if not body:
         return False
     return any(sig in body for sig in DB_ERROR_KEYWORDS)
 
 
-# TODO: extractvalue/updatexml 등 페이로드 반사는 DB 에러가 아닌 별도 evidence로 분리할 필요 있음
+# TODO: extractvalue/updatexml 등 페이로드 반사는 DB 에러가 아닌 별도 evidence로 분리 필요 있음
 # 응답 본문에서 발견된 DB 에러 목록을 반환
 def _matched_db_errors(body: str) -> list[str]:
     if not body:
@@ -212,12 +217,14 @@ def _group_matched_db_errors(group: list[dict]) -> list[str]:
     return matched
 
 
+# 단건 time-based SQLi 지연 메시지를 반환
 def _check_time_based(elapsed: float) -> Optional[str]:
     if elapsed >= SLEEP_THRESHOLD:
         return f"Time-based SQLi (응답 지연 {elapsed:.2f}s >= {SLEEP_THRESHOLD}s)"
     return None
 
 
+# 단건 error-based SQLi 에러 메시지를 반환
 def _check_error_based(body: str) -> Optional[str]:
     for sig in DB_ERROR_KEYWORDS:
         if sig in body:
@@ -225,6 +232,7 @@ def _check_error_based(body: str) -> Optional[str]:
     return None
 
 
+# 단건 SQLi 검사 결과를 튜플로 반환
 def validate_sqli(test_result: dict) -> tuple[bool, str]:
     if not test_result:
         return False, "검증 불가 (입력 없음)"
@@ -258,6 +266,15 @@ def _sqli_response_results(results: list[dict]) -> list[dict]:
     ]
 
 
+# SQLi 시간 측정 결과를 필터링하여 반환
+def _sqli_timing_results(results: list[dict]) -> list[dict]:
+    return [
+        r for r in results
+        if (not r.get("error") or r.get("error") == "timeout")
+        and ("sqli" in _vuln_type(r) or "sql" in _vuln_type(r))
+    ]
+
+
 # 응답 길이 차이 비율을 계산하여 반환
 def _length_diff_score(group: list[dict]) -> float:
     lengths = [_body_length(r) for r in group]
@@ -265,6 +282,136 @@ def _length_diff_score(group: list[dict]) -> float:
         return 0.0
     min_len, max_len = min(lengths), max(lengths)
     return (max_len - min_len) / max(max_len, 1)
+
+
+# 재현성 요약 기본값을 반환
+def _empty_reproduction() -> dict:
+    return {
+        "attempts": 0,
+        "matched": 0,
+        "rate": 0.0,
+        "payload_signal_rate": 0.0,
+    }
+
+
+# 재현성 판정 결과를 생성하여 반환
+def _reproduction_result(attempts: int, matched: int, payload_success: int | None = None, payload_total: int | None = None) -> dict:
+    if attempts <= 0:
+        return _empty_reproduction()
+    payload_total_value = payload_total if payload_total is not None else attempts
+    payload_success_value = payload_success if payload_success is not None else matched
+    return {
+        "attempts": attempts,
+        "matched": matched,
+        "rate": round(matched / max(attempts, 1), 4),
+        "payload_signal_rate": round(payload_success_value / max(payload_total_value, 1), 4),
+    }
+
+
+# 단순 재현성 조건을 계산하여 반환
+def _simple_reproduction(items: list[dict], predicate) -> dict:
+    repeat_items = [r for r in items if int(r.get("repeat_total") or 1) >= 3]
+    if not repeat_items:
+        return _empty_reproduction()
+    matched = sum(1 for r in repeat_items if predicate(r))
+    return _reproduction_result(len(repeat_items), matched)
+
+
+# boolean true/false 차이 재현성을 계산하여 반환
+def _boolean_reproduction(true_items: list[dict], false_items: list[dict]) -> dict:
+    true_by_repeat: dict[int, list[dict]] = defaultdict(list)
+    false_by_repeat: dict[int, list[dict]] = defaultdict(list)
+    for r in true_items:
+        if int(r.get("repeat_total") or 1) >= 3:
+            true_by_repeat[int(r.get("repeat_index") or 1)].append(r)
+    for r in false_items:
+        if int(r.get("repeat_total") or 1) >= 3:
+            false_by_repeat[int(r.get("repeat_index") or 1)].append(r)
+
+    repeat_indexes = sorted(set(true_by_repeat) & set(false_by_repeat))
+    if not repeat_indexes:
+        return _empty_reproduction()
+
+    matched = 0
+    signal_payloads = 0
+    total_payloads = 0
+    for idx in repeat_indexes:
+        true_lengths = [_body_length(r) for r in true_by_repeat[idx]]
+        false_lengths = [_body_length(r) for r in false_by_repeat[idx]]
+        true_len = sum(true_lengths) / max(len(true_lengths), 1)
+        false_len = sum(false_lengths) / max(len(false_lengths), 1)
+        diff = abs(true_len - false_len) / max(true_len, false_len, 1)
+        total_payloads += len(true_lengths) + len(false_lengths)
+        if diff >= BOOL_GROUP_THRESHOLD:
+            matched += 1
+            signal_payloads += len(true_lengths) + len(false_lengths)
+    return _reproduction_result(len(repeat_indexes), matched, signal_payloads, total_payloads)
+
+
+# time delay 재현성을 계산하여 반환
+def _time_reproduction(delay_items: list[dict], baseline_items: list[dict]) -> dict:
+    reproduction = _simple_reproduction(
+        delay_items,
+        lambda r: float(r.get("elapsed") or 0.0) >= SLEEP_THRESHOLD,
+    )
+    baseline_slow = sum(
+        1 for r in baseline_items
+        if int(r.get("repeat_total") or 1) >= 3
+        and float(r.get("elapsed") or 0.0) >= SLEEP_THRESHOLD
+    )
+    reproduction["baseline_slow"] = baseline_slow
+    if baseline_slow:
+        reproduction["matched"] = 0
+        reproduction["rate"] = 0.0
+    return reproduction
+
+
+# ORDER BY valid/invalid 차이 재현성을 계산하여 반환
+def _orderby_reproduction(valid_items: list[dict], invalid_items: list[dict]) -> dict:
+    valid_by_repeat = {
+        int(r.get("repeat_index") or 1): r
+        for r in valid_items
+        if int(r.get("repeat_total") or 1) >= 3
+    }
+    invalid_by_repeat = {
+        int(r.get("repeat_index") or 1): r
+        for r in invalid_items
+        if int(r.get("repeat_total") or 1) >= 3
+    }
+    repeat_indexes = sorted(set(valid_by_repeat) & set(invalid_by_repeat))
+    if not repeat_indexes:
+        return _empty_reproduction()
+
+    matched = 0
+    for idx in repeat_indexes:
+        valid = valid_by_repeat[idx]
+        invalid = invalid_by_repeat[idx]
+        status_changed = valid.get("status") != invalid.get("status")
+        diff = _length_diff_score([valid, invalid])
+        invalid_error = _has_db_error((invalid.get("response_body") or "").lower())
+        if status_changed or diff >= ORDERBY_DIFF_THRES or invalid_error:
+            matched += 1
+    return _reproduction_result(len(repeat_indexes), matched)
+
+
+# confirmed 판정에 충분한 재현성인지 반환
+def _is_confirmed_reproduction(reproduction: dict) -> bool:
+    return (
+        int(reproduction.get("attempts") or 0) >= 3
+        and float(reproduction.get("rate") or 0.0) >= 1.0
+        and float(reproduction.get("payload_signal_rate") or 0.0) >= 0.8
+    )
+
+
+# suspected 판정에 충분한 재현성인지 반환
+def _is_suspected_reproduction(reproduction: dict) -> bool:
+    return (
+        int(reproduction.get("attempts") or 0) >= 3
+        and (
+            float(reproduction.get("rate") or 0.0) >= 0.667
+            or float(reproduction.get("payload_signal_rate") or 0.0) >= 0.6
+        )
+    )
 
 
 # error-based SQLi 그룹 판정 결과를 반환
@@ -288,13 +435,14 @@ def detect_error_group(results: list[dict]) -> list[dict]:
         has_status_signal = any(status in (302, 500) for status in statuses)
         has_status_change = len(statuses) >= 2
         diff = _length_diff_score(group)
+        reproduction = _empty_reproduction()
 
         if repeated_errors:
-            verdict = "confirmed"
+            verdict = "suspected"
             confidence = "high"
             evidence = (
-                f"Error-based SQLi confirmed: 동일 DB 에러 {len(repeated_errors)}개가 "
-                f"2회 이상 재현됨"
+                f"Error-based SQLi suspected: 동일 DB 에러 {len(repeated_errors)}개 발견, "
+                f"단건 강한 증거로 재현 요청 생략"
             )
         elif matched_errors:
             verdict = "suspected"
@@ -329,6 +477,7 @@ def detect_error_group(results: list[dict]) -> list[dict]:
                 "repeated_errors": repeated_errors,
                 "diff_score": round(diff, 4),
                 "statuses": sorted(statuses),
+                "reproduction": reproduction,
             },
         )
         detected.append(decision)
@@ -338,7 +487,7 @@ def detect_error_group(results: list[dict]) -> list[dict]:
 
 # time-based SQLi 그룹 판정 결과를 반환
 def detect_time_group(results: list[dict]) -> list[dict]:
-    sqli_results = _sqli_response_results(results)
+    sqli_results = _sqli_timing_results(results)
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in sqli_results:
         key = _group_key(r, "time")
@@ -354,19 +503,31 @@ def detect_time_group(results: list[dict]) -> list[dict]:
             or "benchmark" in (r.get("payload") or "").lower()
             or float(r.get("elapsed") or 0.0) >= SLEEP_THRESHOLD
         ]
+        baseline_items = [
+            r for r in group
+            if _result_role(r) in {"time_baseline", "safe", "original"}
+        ]
         if not delay_items:
             continue
 
         slow_count = sum(1 for r in delay_items if float(r.get("elapsed") or 0.0) >= SLEEP_THRESHOLD)
         slow_ratio = slow_count / max(len(delay_items), 1)
         avg_delay = sum(float(r.get("elapsed") or 0.0) for r in delay_items) / len(delay_items)
+        reproduction = _time_reproduction(delay_items, baseline_items)
 
-        if len(delay_items) >= 2 and slow_ratio >= 0.9:
+        if _is_confirmed_reproduction(reproduction):
             verdict = "confirmed"
             confidence = "high"
             evidence = (
-                f"Time-based SQLi confirmed: delay payload {len(delay_items)}개 중 "
-                f"{slow_count}개가 {SLEEP_THRESHOLD}s 이상 지연됨"
+                f"Time-based SQLi confirmed: 재현 요청 {reproduction['attempts']}회 중 "
+                f"{reproduction['matched']}회가 {SLEEP_THRESHOLD}s 이상 지연됨"
+            )
+        elif _is_suspected_reproduction(reproduction):
+            verdict = "suspected"
+            confidence = "medium"
+            evidence = (
+                f"Time-based SQLi suspected: 재현율 {reproduction['rate']:.0%}, "
+                f"delay payload 평균 응답 시간 {avg_delay:.2f}s"
             )
         elif len(delay_items) >= 2 and slow_count:
             verdict = "suspected"
@@ -402,6 +563,7 @@ def detect_time_group(results: list[dict]) -> list[dict]:
                 "delay_threshold": SLEEP_THRESHOLD,
                 "slow_ratio": round(slow_ratio, 4),
                 "avg_delay": round(avg_delay, 4),
+                "reproduction": reproduction,
             },
         )
         detected.append(decision)
@@ -409,6 +571,7 @@ def detect_time_group(results: list[dict]) -> list[dict]:
     return detected
 
 
+# boolean-based SQLi 그룹 판정 결과를 반환
 def detect_boolean_group(results: list[dict]) -> list[dict]:
     sqli_results = [
         r for r in results
@@ -449,17 +612,36 @@ def detect_boolean_group(results: list[dict]) -> list[dict]:
                 best = max(true_items, key=_body_length)
                 matched_errors = _group_matched_db_errors(true_items + false_items)
                 has_repeated_pair = len(true_items) >= 2 and len(false_items) >= 2
+                reproduction = _boolean_reproduction(true_items, false_items)
+                if _is_confirmed_reproduction(reproduction):
+                    verdict = "confirmed"
+                    confidence = "high"
+                    evidence = (
+                        f"Boolean-based SQLi confirmed: true/false 차이가 "
+                        f"{reproduction['matched']}/{reproduction['attempts']}회 재현됨"
+                    )
+                elif _is_suspected_reproduction(reproduction):
+                    verdict = "suspected"
+                    confidence = "medium"
+                    evidence = (
+                        f"Boolean-based SQLi suspected: true/false 차이 재현율 "
+                        f"{reproduction['rate']:.0%}"
+                    )
+                else:
+                    verdict = "suspected" if matched_errors or has_repeated_pair else "candidate"
+                    confidence = "high" if matched_errors else ("medium" if has_repeated_pair else "low")
                 decision = _build_decision(
                     result=best,
                     group=group,
                     category="boolean",
-                    verdict="suspected" if matched_errors or has_repeated_pair else "candidate",
-                    confidence="high" if matched_errors else ("medium" if has_repeated_pair else "low"),
+                    verdict=verdict,
+                    confidence=confidence,
                     reason=evidence,
                     extra_evidence={
                         "matched_errors": matched_errors,
                         "diff_score": round(diff, 4),
                         "repeated_pair": has_repeated_pair,
+                        "reproduction": reproduction,
                     },
                 )
                 detected.append(decision)
@@ -527,8 +709,8 @@ def detect_boolean_group(results: list[dict]) -> list[dict]:
     return detected
 
 
+# boolean 정찰 페이로드 그룹 판정 결과를 반환
 def detect_probe_group(results: list[dict]) -> list[dict]:
-    """ASCII/SUBSTRING/MID/REGEXP/LENGTH=N 등 정찰 페이로드 전용."""
     probe_results = [
         r for r in results
         if not r.get("error")
@@ -561,7 +743,7 @@ def detect_probe_group(results: list[dict]) -> list[dict]:
 
         if diff >= BOOL_GROUP_THRESHOLD and len(group) >= 2:
             evidence = (
-                f"Boolean Probe SQLi (confirmed): {len(group)}개 정찰 페이로드 응답 분산 "
+                f"Boolean Probe SQLi signal: {len(group)}개 정찰 페이로드 응답 분산 "
                 f"(min={min_len}b, max={max_len_v}b, diff={diff:.1%})"
             )
         elif has_error:
@@ -605,6 +787,7 @@ def detect_probe_group(results: list[dict]) -> list[dict]:
     return detected
 
 
+# ORDER BY SQLi 그룹 판정 결과를 반환
 def detect_orderby_group(results: list[dict]) -> list[dict]:
     orderby_results = [
         r for r in results
@@ -624,6 +807,10 @@ def detect_orderby_group(results: list[dict]) -> list[dict]:
     detected: list[dict] = []
 
     for _key, group in groups.items():
+        valid_items = [r for r in group if _result_role(r) == "valid_order"]
+        invalid_items = [r for r in group if _result_role(r) == "invalid_order"]
+        reproduction = _orderby_reproduction(valid_items, invalid_items)
+
         if len(group) < 2:
             if group:
                 sample_body = (group[0].get("response_body") or "").lower()
@@ -643,6 +830,7 @@ def detect_orderby_group(results: list[dict]) -> list[dict]:
                     extra_evidence={
                         "matched_errors": matched_errors,
                         "diff_score": None,
+                        "reproduction": reproduction,
                     },
                 )
                 detected.append(decision)
@@ -660,13 +848,12 @@ def detect_orderby_group(results: list[dict]) -> list[dict]:
             for r in group
         )
 
-        if diff >= ORDERBY_DIFF_THRES or has_error:
-            evidence_extra = " + 'unknown column' 에러" if has_error else ""
+        if _is_confirmed_reproduction(reproduction):
             evidence = (
-                f"ORDER BY SQLi (confirmed): {len(group)}개 페이로드 응답 분산 "
-                f"(min={min_len}b, max={max_len_v}b, diff={diff:.1%}){evidence_extra}"
+                f"ORDER BY SQLi confirmed: valid/invalid 차이가 "
+                f"{reproduction['matched']}/{reproduction['attempts']}회 재현됨"
             )
-            best = max(group, key=_body_length)
+            best = max(invalid_items or group, key=_body_length)
             matched_errors = _group_matched_db_errors(group)
             if has_error and "unknown column" not in matched_errors:
                 matched_errors.append("unknown column")
@@ -674,12 +861,39 @@ def detect_orderby_group(results: list[dict]) -> list[dict]:
                 result=best,
                 group=group,
                 category="order_by",
-                verdict="suspected",
-                confidence="high" if matched_errors else "medium",
+                verdict="confirmed",
+                confidence="high",
                 reason=evidence,
                 extra_evidence={
                     "matched_errors": matched_errors,
                     "diff_score": round(diff, 4),
+                    "reproduction": reproduction,
+                },
+            )
+            detected.append(decision)
+        elif diff >= ORDERBY_DIFF_THRES or has_error:
+            evidence_extra = " + 'unknown column' 에러" if has_error else ""
+            evidence = (
+                f"ORDER BY SQLi signal: {len(group)}개 페이로드 응답 분산 "
+                f"(min={min_len}b, max={max_len_v}b, diff={diff:.1%}){evidence_extra}"
+            )
+            best = max(group, key=_body_length)
+            matched_errors = _group_matched_db_errors(group)
+            if has_error and "unknown column" not in matched_errors:
+                matched_errors.append("unknown column")
+            verdict = "suspected"
+            confidence = "high" if matched_errors else "medium"
+            decision = _build_decision(
+                result=best,
+                group=group,
+                category="order_by",
+                verdict=verdict,
+                confidence=confidence,
+                reason=evidence,
+                extra_evidence={
+                    "matched_errors": matched_errors,
+                    "diff_score": round(diff, 4),
+                    "reproduction": reproduction,
                 },
             )
             detected.append(decision)
@@ -702,6 +916,7 @@ def detect_orderby_group(results: list[dict]) -> list[dict]:
                 extra_evidence={
                     "matched_errors": matched_errors,
                     "diff_score": round(diff, 4),
+                    "reproduction": reproduction,
                 },
             )
             detected.append(decision)

@@ -10,6 +10,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from probe.repeat import build_recheck_tasks
+
 
 _HIDDEN_TAG_RE = re.compile(r"<input[^>]+>", re.IGNORECASE | re.DOTALL)
 _INPUT_TYPE_RE = re.compile(r'\btype=["\']([^"\']+)["\']', re.IGNORECASE)
@@ -17,9 +19,8 @@ _INPUT_NAME_RE = re.compile(r'\bname=["\']([^"\']+)["\']', re.IGNORECASE)
 _INPUT_VALUE_RE = re.compile(r'\bvalue=["\']([^"\']*)["\']', re.IGNORECASE)
 _CSRF_NAME_RE = re.compile(r"(csrf|token|nonce|_token|authenticity|captcha)", re.IGNORECASE)
 
-
+# CSRF 숨은 입력값을 새로 가져와 반환
 def _fetch_fresh_csrf(session: requests.Session, source_url: str, timeout: int) -> dict[str, str]:
-    """GET source_url, extract fresh values for any CSRF hidden inputs."""
     try:
         r = session.get(source_url, timeout=timeout, allow_redirects=True)
         tokens: dict[str, str] = {}
@@ -40,6 +41,7 @@ def _fetch_fresh_csrf(session: requests.Session, source_url: str, timeout: int) 
         return {}
 
 
+# HTTP 요청 세션을 생성하여 반환
 def _make_session() -> requests.Session:
     s = requests.Session()
     s.headers.update(
@@ -65,16 +67,15 @@ def _make_session() -> requests.Session:
     s.mount("https://", HTTPAdapter(max_retries=retry))
     return s
 
-
+# 프로브 작업을 실행하고 필요한 SQLi 재현 요청까지 수행하여 반환
 def execute(
     tasks: list[dict],
     timeout: int = 10,
     delay: float = 0.0,
     output_file: str | None = None,
     progress_callback=None,
+    enable_recheck: bool = True,
 ) -> list[dict]:
-    # probe task -> HTTP send -> results
-
     session = _make_session()
     results: list[dict] = []
     total = len(tasks)
@@ -98,6 +99,9 @@ def execute(
             "inject_location": inject_location,
             "inject_param": inject_param,
             "base_value": t.get("base_value"),
+            "repeat_index": t.get("repeat_index", 1),
+            "repeat_total": t.get("repeat_total", 1),
+            "reproduction_key": t.get("reproduction_key"),
             "meta": t.get("meta") or {},
             "error": None,
         }
@@ -274,6 +278,20 @@ def execute(
 
         if progress_callback and total > 0:
             progress_callback(i + 1, total)
+
+    if enable_recheck:
+        recheck_tasks = build_recheck_tasks(tasks, results)
+        if recheck_tasks:
+            results.extend(
+                execute(
+                    recheck_tasks,
+                    timeout=timeout,
+                    delay=delay,
+                    output_file=None,
+                    progress_callback=None,
+                    enable_recheck=False,
+                )
+            )
 
     if output_file:
         parent = os.path.dirname(output_file)

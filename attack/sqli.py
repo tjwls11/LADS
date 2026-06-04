@@ -230,10 +230,6 @@ def get_by_context(context: str, strength: str = "MEDIUM") -> List[Payload]:
         pool = ORDERBY
     elif context == "field":
         pool = FIELD_SELECTOR
-    elif context in {"login", "auth"}:
-        pool = SQLI_LOGIN
-    elif context == "union":
-        pool = UNION_BASED
     elif context == "encoded":
         pool = ENCODED
     else:
@@ -249,10 +245,8 @@ def get_all() -> List[Payload]:
         BOOLEAN_NUMERIC,
         TIME_BASED_STRING,
         TIME_BASED_NUMERIC,
-        UNION_BASED,
         ORDERBY,
         FIELD_SELECTOR,
-        SQLI_LOGIN,
         JSON_CONTEXT,
         ENCODED,
     ])
@@ -308,7 +302,6 @@ def get_by_strength(strength: str = "MEDIUM") -> List[Payload]:
 
 _SQL_CONTEXT_MAP = {
     "field_selector": "field",
-    "auth":           "login",
     "like_string":    None,
 }
 
