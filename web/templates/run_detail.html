@@ -31,25 +31,47 @@
 
   {# ── 파이프라인 상태 ── #}
   <div class="rounded border border-surface-line bg-white p-5">
-    <h2 class="mb-4 text-[15px] font-black text-slate-950">파이프라인 완료 상태</h2>
-    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5">
+    <div class="mb-4 flex items-center justify-between">
+      <h2 class="text-[15px] font-black text-slate-950">파이프라인 완료 상태</h2>
+      {% if step_timing.total %}
+      <span class="font-mono text-[12px] text-slate-500">총 소요: <span class="font-black text-slate-800">{{ "%.0f"|format(step_timing.total // 60) }}분 {{ "%.0f"|format(step_timing.total % 60) }}초</span></span>
+      {% endif %}
+    </div>
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-7">
       {% set steps = [
-        ('크롤링',        has_crawl,    'travel_explore'),
-        ('페이로드',      has_payload,  'psychology'),
-        ('주입 테스트',   has_probe,    'radar'),
-        ('실행',          has_exec,     'terminal'),
-        ('취약점 판정',   has_findings, 'analytics'),
+        ('크롤링',      has_crawl,    'travel_explore', 'crawl'),
+        ('페이로드',    has_payload,  'psychology',     'payload'),
+        ('주입 테스트', has_probe,    'radar',          'probe'),
+        ('실행',        has_exec,     'terminal',       'execute'),
+        ('취약점 판정', has_findings, 'analytics',      'validate'),
+        ('BAC',         has_findings, 'shield_person',  'bac'),
+        ('Misconfig',   has_findings, 'security',       'misconfig'),
       ] %}
-      {% for label, done, icon in steps %}
-      <div class="flex items-center gap-3 rounded border px-3 py-3 {% if done %}border-emerald-200 bg-emerald-50{% else %}border-slate-200 bg-slate-50{% endif %}">
-        <span class="material-symbols-outlined text-[20px] shrink-0 {% if done %}text-emerald-600{% else %}text-slate-400{% endif %}">{{ icon }}</span>
+      {% for label, done, icon, key in steps %}
+      {% set elapsed = step_timing.get(key) %}
+      <div class="flex items-center gap-2 rounded border px-3 py-3 {% if done %}border-emerald-200 bg-emerald-50{% else %}border-slate-200 bg-slate-50{% endif %}">
+        <span class="material-symbols-outlined text-[18px] shrink-0 {% if done %}text-emerald-600{% else %}text-slate-400{% endif %}">{{ icon }}</span>
         <div class="min-w-0">
-          <div class="truncate text-[12px] font-extrabold {% if done %}text-emerald-700{% else %}text-slate-500{% endif %}">{{ label }}</div>
-          <div class="font-mono text-[11px] {% if done %}text-emerald-600{% else %}text-slate-400{% endif %}">{% if done %}Done{% else %}—{% endif %}</div>
+          <div class="truncate text-[11px] font-extrabold {% if done %}text-emerald-700{% else %}text-slate-500{% endif %}">{{ label }}</div>
+          {% if elapsed %}
+          <div class="font-mono text-[10px] text-slate-500">
+            {% if elapsed >= 60 %}{{ "%.0f"|format(elapsed // 60) }}m {{ "%.0f"|format(elapsed % 60) }}s
+            {% else %}{{ "%.1f"|format(elapsed) }}s{% endif %}
+          </div>
+          {% else %}
+          <div class="font-mono text-[10px] {% if done %}text-emerald-600{% else %}text-slate-400{% endif %}">{% if done %}Done{% else %}—{% endif %}</div>
+          {% endif %}
         </div>
       </div>
       {% endfor %}
     </div>
+    {% if has_log %}
+    <div class="mt-3 text-right">
+      <a href="/runs/{{ run_id }}/scan.log" class="text-[11px] font-bold text-slate-400 hover:text-slate-700">
+        <span class="material-symbols-outlined align-middle text-[13px]">description</span> 스캔 로그 다운로드
+      </a>
+    </div>
+    {% endif %}
   </div>
 
   {# ── 요약 카드 ── #}
@@ -253,6 +275,27 @@
 
 {% block scripts %}
 <style>
+  #findings-table th, #exec-table th { position: relative; }
+  tr.finding-row { cursor: pointer; }
+  tr.finding-row:hover td { background: #f8fafc; }
+  .col-resizer {
+    position: absolute; right: -3px; top: 10%;
+    width: 8px; height: 80%;
+    cursor: col-resize; user-select: none; z-index: 10;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .col-resizer::after {
+    content: '';
+    display: block;
+    width: 2px; height: 100%;
+    background: #cbd5e1;
+    border-radius: 2px;
+    transition: background .15s, width .15s;
+  }
+  .col-resizer:hover::after, .col-resizer.resizing::after {
+    background: #3b82f6;
+    width: 3px;
+  }
   .detail-filter-btn {
     padding: 5px 12px;
     border-radius: 4px;
@@ -299,5 +342,91 @@
     var active = document.getElementById('ef-' + mode);
     if (active) active.classList.add('active');
   }
+
+  // ── 컬럼 리사이즈 ──
+  function makeResizable(tableId) {
+    var table = document.getElementById(tableId);
+    if (!table) return;
+    var ths = Array.from(table.querySelectorAll('thead th'));
+    ths.forEach(function (th) {
+      var r = document.createElement('div');
+      r.className = 'col-resizer';
+      th.appendChild(r);
+      r.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        // 드래그 시작 시 모든 컬럼 너비 고정 후 table-layout: fixed 적용
+        ths.forEach(function (t) { t.style.width = t.getBoundingClientRect().width + 'px'; });
+        table.style.tableLayout = 'fixed';
+        var sx = e.pageX;
+        var sw = th.getBoundingClientRect().width;
+        r.classList.add('resizing');
+        function mv(e) {
+          var w = sw + (e.pageX - sx);
+          if (w > 40) th.style.width = w + 'px';
+        }
+        function up() {
+          r.classList.remove('resizing');
+          document.removeEventListener('mousemove', mv);
+          document.removeEventListener('mouseup', up);
+        }
+        document.addEventListener('mousemove', mv);
+        document.addEventListener('mouseup', up);
+      });
+      r.addEventListener('click', function (e) { e.stopPropagation(); });
+    });
+  }
+  makeResizable('findings-table');
+  makeResizable('exec-table');
+
+  // ── URL별 구분선 ──
+  ;(function () {
+    function addSeparators(tableId, urlCol) {
+      var table = document.getElementById(tableId);
+      if (!table) return;
+      var tbody = table.querySelector('tbody');
+      var cols = table.querySelector('thead tr') ? table.querySelector('thead tr').cells.length : 6;
+
+      function rebuild() {
+        // 기존 구분선 제거
+        Array.from(tbody.querySelectorAll('.url-sep')).forEach(function(s) { s.remove(); });
+
+        // 보이는 행만 URL별로 그룹핑
+        var rows = Array.from(tbody.querySelectorAll('tr:not(.url-sep)'))
+          .filter(function(r) { return r.style.display !== 'none'; });
+
+        var groups = {}, order = [];
+        rows.forEach(function(r) {
+          var url = r.cells[urlCol] ? r.cells[urlCol].textContent.trim() : '';
+          if (!groups[url]) { groups[url] = []; order.push(url); }
+          groups[url].push(r);
+        });
+
+        order.forEach(function(url) {
+          var cnt = groups[url].length;
+          var sep = document.createElement('tr');
+          sep.className = 'url-sep';
+          sep.innerHTML = '<td colspan="' + cols + '" style="padding:7px 14px;background:#f8fafc;border-top:2px solid #e2e8f0;border-bottom:1px solid #e2e8f0;">' +
+            '<div style="display:flex;align-items:center;gap:8px;">' +
+              '<span style="font-family:monospace;font-size:12px;font-weight:700;color:#334155;">' + url + '</span>' +
+              '<span style="background:#e2e8f0;border-radius:4px;padding:1px 7px;font-size:10px;font-weight:700;color:#64748b;">' + cnt + '건</span>' +
+            '</div>' +
+          '</td>';
+          tbody.insertBefore(sep, groups[url][0]);
+        });
+      }
+
+      rebuild();
+
+      // 필터 후 구분선 재생성
+      var _ff = window.filterFindings;
+      window.filterFindings = function(mode) {
+        _ff && _ff(mode);
+        setTimeout(rebuild, 0);
+      };
+    }
+
+    addSeparators('findings-table', 1);
+  })();
 </script>
 {% endblock %}
