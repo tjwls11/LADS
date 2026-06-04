@@ -8,7 +8,7 @@ from findings import (
     make_finding,
     sqli_finding_from_verdict,
     MODULE_XSS, MODULE_SQLI, MODULE_BAC,
-    XSS_VERIFIED, XSS_REFLECTED, XSS_SUSPICIOUS,
+    XSS_VERIFIED, XSS_REFLECTED, XSS_STORED_REFLECTED, XSS_SUSPICIOUS,
     SQLI_CONFIRMED, SQLI_SUSPECTED, SQLI_CANDIDATE, BAC_SUSPECTED_MEDIUM,
     HIGH, MEDIUM, LOW,
 )
@@ -116,16 +116,48 @@ def _make_finding(r: dict, evidence: str) -> dict:
 def _validate_single(r: dict) -> tuple[bool, str]:
     vt = _vuln_type(r)
     if "xss" in vt:
-        return validate_xss(r)
+        found, ev, *_ = validate_xss(r)
+        return found, ev
     if "sqli" in vt or "sql" in vt:
         return validate_sqli(r)
     if "bac" in vt or "broken_access" in vt or "auth" in vt:
         return validate_bac(r)
 
-    ok, ev = validate_xss(r)
-    if ok:
+    found, ev, *_ = validate_xss(r)
+    if found:
         return True, ev
     return validate_sqli(r)
+
+
+def _handle_xss(raw: tuple, r: dict, rid: str | None, findings: list[dict], found_ids: set) -> None:
+    if rid in found_ids:
+        return
+    if not isinstance(raw, tuple) or not raw[0]:
+        return
+    found, evidence, xss_type, confidence = raw
+    meta     = r.get("meta") or {}
+    vt       = (meta.get("vuln_type") or "").lower()
+    category = _derive_category(vt, evidence)
+    f = make_finding(
+        module=MODULE_XSS,
+        type=xss_type,
+        category=category,
+        url=r.get("url") or "",
+        param=r.get("inject_param"),
+        payload=r.get("payload") or "",
+        status=r.get("status"),
+        confidence=confidence,
+        evidence=evidence,
+    )
+    f["id"]          = r.get("id")
+    f["point"]       = r.get("point")
+    f["task_group_id"] = r.get("task_group_id")
+    f["inject_mode"] = r.get("inject_mode")
+    f["elapsed"]     = r.get("elapsed") or 0.0
+    f["role"]        = meta.get("role")
+    findings.append(f)
+    if rid:
+        found_ids.add(rid)
 
 
 def _handle_sqli(raw, r: dict, rid: str | None, findings: list[dict], found_ids: set) -> None:
@@ -157,6 +189,8 @@ def validate(results: list[dict], progress_callback=None) -> list[dict]:
         vt = _vuln_type(r)
         if "sqli" in vt or "sql" in vt:
             _handle_sqli(validate_sqli(r), r, r.get("id"), findings, found_ids)
+        elif "xss" in vt:
+            _handle_xss(validate_xss(r), r, r.get("id"), findings, found_ids)
         else:
             ok, evidence = _validate_single(r)
             if ok:
