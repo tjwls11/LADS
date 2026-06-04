@@ -626,7 +626,8 @@ def findings_page():
                 hit = findings_by_id.get(r.get("id"))
                 r["_vulnerable"] = hit is not None
                 r["_evidence"] = hit.get("evidence", "") if hit else ""
-                r["_vuln_type"] = hit.get("module", "") if hit else (r.get("meta") or {}).get("vuln_type", "")
+                r["_vuln_type"] = hit.get("type") or hit.get("module", "") if hit else (r.get("meta") or {}).get("vuln_type", "")
+                r["_extra"] = hit.get("extra") or {} if hit else {}
             all_results = exec_results
         except Exception:
             pass
