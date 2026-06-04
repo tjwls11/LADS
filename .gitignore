@@ -17,6 +17,9 @@ sum_log.txt
 
 # 테스트용
 newbase.py
+dalfox/
+sqlmap/
+owasp-zap/
 
 # Debug logs
 debug-*.log

@@ -11,7 +11,7 @@ OUTPUT_FILE = os.getenv("TARGETS_FILE",  "results/targets.json")
 CSRF_RE = re.compile(r"(csrf|token|nonce|_token|authenticity|captcha)", re.IGNORECASE)
 
 # 인젝션 제외: 의미 없는 버튼/파일 타입
-SKIP_TYPES = {"submit", "button", "reset", "image", "file"}
+SKIP_TYPES = {"button", "reset", "image", "file"}
 
 BOOL_RE = re.compile(r"^(true|false|on|off|yes|no)$", re.IGNORECASE)
 NUMBER_RE = re.compile(r"^[+-]?\d+(?:\.\d+)?$")

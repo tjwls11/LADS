@@ -286,7 +286,7 @@ def _task_execute(run_path_fn, emit_progress=None):
         _prog(emit_progress, 35 + int(done / max(total, 1) * 55))
 
     print(f"[EXEC] start: {len(tasks)} tasks")
-    results = execute(tasks, timeout=10, delay=0.0, output_file=exec_file, progress_callback=_execute_progress)
+    results = execute(tasks, timeout=5, delay=0.3, output_file=exec_file, progress_callback=_execute_progress)
     ok      = sum(1 for r in results if r.get("error") is None)
     timeout = sum(1 for r in results if r.get("error") == "timeout")
     err     = sum(1 for r in results if r.get("error") and r.get("error") != "timeout")
@@ -313,7 +313,7 @@ def _task_validate(run_path_fn, emit_progress=None):
     xss_cnt  = sum(1 for f in findings if f.get("module") == "xss")
     sqli_cnt = sum(1 for f in findings if f.get("module") == "sqli")
     bac_cnt  = sum(1 for f in findings if f.get("module") == "bac")
-    print(f"[VALIDATE] done: findings={len(findings)}, xss={xss_cnt}, sqli={sqli_cnt}, bac={bac_cnt}")
+    print(f"[VALIDATE] done: findings={len(findings)}, xss={xss_cnt}, sqli={sqli_cnt}")
     _prog(emit_progress, 95)
 
 

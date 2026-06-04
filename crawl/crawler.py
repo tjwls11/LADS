@@ -48,7 +48,7 @@ DANGER_LINK_PATTERNS = [
 
 # 크롤링 동작 설정값
 class CrawlConfig:
-    MAX_PAGES = int(os.getenv("CRAWL_MAX_PAGES", "500"))               # 최대 크롤링 페이지 수
+    MAX_PAGES = int(os.getenv("CRAWL_MAX_PAGES", "800"))               # 최대 크롤링 페이지 수
     MIN_PAGES = int(os.getenv("CRAWL_MIN_PAGES", "100"))               # 조기 종료 검사 시작 기준
     STAGNATION_LIMIT = int(os.getenv("CRAWL_STAGNATION_LIMIT", "50"))  # 새 입력 구조 없이 허용할 최대 페이지 수
     DELAY = float(os.getenv("CRAWL_DELAY", "0.3"))                     # 요청 간 딜레이 (초)
@@ -213,25 +213,31 @@ class Crawler:
                 if not self.login(login_url):
                     print("[WARN] login failed; continuing anonymously", file=sys.stderr)
 
+        # 기본 시드 URL과 추가 시드 URL을 큐에 적재
         self.queue.append(self._normalize(self.base_url + "/"))
         for seed in (extra_seeds or []):
             self.queue.append(seed)
 
         crawled = 0
+        # BFS 방식으로 URL 방문, 최대 페이지 수 또는 조기 종료 조건 충족 시까지 반복
         while self.queue and crawled < CrawlConfig.MAX_PAGES:
-            url = self.queue.popleft()
+            url = self.queue.popleft() #FIFO 큐에서 URL 추출
             url = self._normalize(url)
+            # 방문 여부, 제외 패턴, 범위 검사 후 방문 처리
             if url in self.visited or self._is_excluded(url) or not self._is_in_scope(url):
                 continue
             self.visited.add(url)
 
-            print(f"[{crawled + 1:03d}] {url}")
+            print(f"[{crawled + 1:03d}] {url}") 
             resp = self._fetch(url)
             if resp is None:
                 crawled += 1
                 continue
 
-            result = PageResult(url=url, status_code=resp.status_code)
+            result = PageResult(url=url, status_code=resp.status_code) # 페이지 결과 객체 생성
+
+            # 새 입력 구조 발견 여부로 stagnation 카운터 업데이트
+            pre_size = len(self.seen_input_structures)
 
             # URL 쿼리 파라미터 저장
             parsed = urlparse(url)
@@ -248,7 +254,7 @@ class Crawler:
                 for form_tag in soup.find_all("form"):
                     form = self._parse_form(form_tag, url)
                     result.forms.append(asdict(form))
-                    self.seen_input_structures.add(self._form_signature(form))
+                    self.seen_input_structures.add(self._form_signature(form)) # form 발견시 add
 
                 for a in soup.find_all("a", href=True):
                     link = self._normalize(urljoin(url, a["href"]))
@@ -264,11 +270,8 @@ class Crawler:
                         if link not in self.visited:
                             self.queue.append(link)
 
-            # 새 입력 구조 발견 여부로 stagnation 카운터 업데이트
-            pre_size = len(self.seen_input_structures)
-
             query_sig = self._query_signature(url)
-            if query_sig:
+            if query_sig: # 쿼리 발견시 add
                 self.seen_input_structures.add(query_sig)
 
             self.results.append(result)
