@@ -17,7 +17,6 @@ from dotenv import load_dotenv
 from flask import Flask, Response, redirect, render_template, request, send_file, jsonify
 from tasks import (
     _task_crawl as _crawl_impl,
-    _task_payload as _payload_impl,
     _task_probe as _probe_impl,
     _task_execute as _execute_impl,
     _task_validate as _validate_impl,
@@ -33,7 +32,6 @@ _DEPS = {
     "requests": "requests",
     "beautifulsoup4": "bs4",
     "lxml": "lxml",
-    "openai": "openai",
 }
 
 for _pkg, _mod in _DEPS.items():
@@ -48,8 +46,6 @@ load_dotenv()
 
 
 TARGETS_CONFIG_FILE = "targets_config.json"
-PAYLOADS_FILE = os.getenv("PAYLOADS_FILE", "results/payloads_llm.json")
-PAYLOADS_META_FILE = os.getenv("PAYLOADS_META_FILE", "results/payloads_llm_meta.json")
 RUNS_DIR = "runs"
 
 def _load_targets() -> list[dict]:
@@ -114,9 +110,7 @@ if _TARGETS:
 _current_run_id: str | None = None
 
 app = Flask(__name__, template_folder='web/templates', static_folder='web/static')
-# 개발 중 템플릿/정적 파일이 "안 바뀌는" 문제 방지용 설정.
-# - debug가 꺼져 있어도 templates 변경이 즉시 반영되도록 함
-# - 정적 파일 캐시를 줄여(0초) 새로고침 시 바로 반영되도록 함
+
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 app.jinja_env.auto_reload = True
@@ -130,11 +124,66 @@ _log_buffer:     list[str] = []       # 최근 500줄 보관
 _log_subscribers: list[queue.Queue] = []
 _LOG_BUF_MAX = 500
 
+# ── 로그 파일 / 파이프라인 타이밍 ────────────────────────────────
+_log_file_handle = None
+_step_timing: dict[str, float] = {}   # {"crawl": 12.3, ...}
+
+
+def _open_log_file(run_dir: str) -> None:
+    global _log_file_handle
+    _close_log_file()
+    try:
+        _log_file_handle = open(os.path.join(run_dir, "scan.log"), "w", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _close_log_file() -> None:
+    global _log_file_handle
+    if _log_file_handle:
+        try:
+            _log_file_handle.close()
+        except Exception:
+            pass
+        _log_file_handle = None
+
+
+def _save_timing(run_dir: str) -> None:
+    try:
+        import json as _json
+        with open(os.path.join(run_dir, "timing.json"), "w", encoding="utf-8") as f:
+            _json.dump(_step_timing, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
 def _broadcast(msg: str) -> None:
+    global _step_timing
     with _log_lock:
         _log_buffer.append(msg)
         if len(_log_buffer) > _LOG_BUF_MAX:
             _log_buffer.pop(0)
+
+        # 로그 파일 저장 (__PROGRESS__ 제외, 나머지 전부 기록)
+        if _log_file_handle and not msg.startswith("__PROGRESS__"):
+            try:
+                from datetime import datetime as _dt
+                _log_file_handle.write(f"[{_dt.now().strftime('%H:%M:%S')}] {msg}\n")
+                _log_file_handle.flush()
+            except Exception:
+                pass
+
+        # 파이프라인 타이밍 파싱: __TIMING__step_name:seconds
+        if msg.startswith("__TIMING__"):
+            try:
+                payload = msg[len("__TIMING__"):]
+                step, secs = payload.split(":", 1)
+                _step_timing[step.strip()] = float(secs.strip())
+                if _current_run_id:
+                    _save_timing(os.path.join(RUNS_DIR, _current_run_id))
+            except Exception:
+                pass
+
         for sub in _log_subscribers:
             try:
                 sub.put_nowait(msg)
@@ -270,13 +319,8 @@ def _task_crawl():
     _crawl_impl(_run_path, _active_url(), _emit_progress)
 
 
-def _task_payload():
-    targets_file = _run_path("targets.json")
-    _payload_impl(PAYLOADS_FILE, targets_file=targets_file, emit_progress=_emit_progress)
-
-
 def _task_probe():
-    _probe_impl(_run_path, PAYLOADS_FILE, _emit_progress)
+    _probe_impl(_run_path, _emit_progress)
 
 
 def _task_execute():
@@ -292,14 +336,13 @@ def _task_misconfig():
 
 
 def _task_all(skip_crawl: bool = False, resume: bool = False):
-    _all_impl(_run_path, _active_url(), PAYLOADS_FILE, PAYLOADS_META_FILE, skip_crawl=skip_crawl, resume= resume, emit_progress=_emit_progress)
+    _all_impl(_run_path, _active_url(), skip_crawl=skip_crawl, resume=resume, emit_progress=_emit_progress)
 
 def _task_bac():
     _bac_impl(_run_path, _active_url(), _emit_progress)
 
 _TASK_FUNCS = {
     "crawl":    _task_crawl,
-    "payload":  _task_payload,
     "probe":    _task_probe,
     "execute":  _task_execute,
     "validate": _task_validate,
@@ -341,9 +384,11 @@ def stream_task(task):
             _current_run_id = _create_run("main")
         elif task == "bac":
             _current_run_id = _create_run("bac")
-            
+
         with _log_lock:
             _log_buffer.clear()
+            _step_timing.clear()
+        _open_log_file(os.path.join(RUNS_DIR, _current_run_id))
 
         def run_in_thread():
             global _running_task
@@ -367,6 +412,7 @@ def stream_task(task):
                 _task_lock.release()
                 _broadcast(f"[{label}] 완료")
                 _broadcast("__DONE__")
+                _close_log_file()
 
         threading.Thread(target=run_in_thread, daemon=True).start()
 
@@ -427,7 +473,6 @@ def _get_file_status():
     return [
         ("크롤링 결과", os.path.exists(_run_path("crawl_result.json"))),
         ("타깃 목록", os.path.exists(_run_path("targets.json"))),
-        ("페이로드", os.path.exists(PAYLOADS_FILE)),
         ("탐색 작업 목록", os.path.exists(_run_path("probe_tasks.json"))),
         ("실행 결과", os.path.exists(_run_path("execution_results.json"))),
         ("취약점 결과", os.path.exists(_run_path("findings.json"))),
@@ -475,7 +520,6 @@ def _misconfig_done() -> bool:
 def _get_pipeline_steps():
     checks = [
         ("crawl",     "크롤러",        "travel_explore", os.path.exists(_run_path("crawl_result.json")) and os.path.exists(_run_path("targets.json"))),
-        ("payload",   "페이로드",       "psychology",     os.path.exists(PAYLOADS_FILE)),
         ("probe",     "주입 테스트 준비", "radar",          os.path.exists(_run_path("probe_tasks.json"))),
         ("execute",   "실행기",         "terminal",       os.path.exists(_run_path("execution_results.json"))),
         ("validate",  "분석기",         "analytics",      os.path.exists(_run_path("findings.json"))),
@@ -771,6 +815,14 @@ def run_detail(run_id):
     files = set(os.listdir(run_dir))
     run_type = _infer_run_type(run_id)
 
+    step_timing: dict = {}
+    if "timing.json" in files:
+        try:
+            with open(os.path.join(run_dir, "timing.json"), encoding="utf-8") as f:
+                step_timing = json.load(f)
+        except Exception:
+            pass
+
     findings, xss_cnt, sqli_cnt, bac_cnt, misconfig_cnt = [], 0, 0, 0, 0
     if "findings.json" in files:
         try:
@@ -810,7 +862,6 @@ def run_detail(run_id):
         is_current=(run_id == _current_run_id),
         has_crawl="crawl_result.json" in files,
         has_targets="targets.json" in files,
-        has_payload=os.path.exists(PAYLOADS_FILE),
         has_probe="probe_tasks.json" in files or "bac_vertical_tasks.json" in files,
         has_exec="execution_results.json" in files or "bac_vertical_results.json" in files,
         has_findings="findings.json" in files or "bac_findings.json" in files,
@@ -824,6 +875,8 @@ def run_detail(run_id):
         exec_ok=exec_ok,
         exec_timeout=exec_timeout,
         exec_err=exec_err,
+        step_timing=step_timing,
+        has_log="scan.log" in files,
         current_run=_current_run_id,
     )
 
@@ -860,6 +913,15 @@ def download_report(run_id):
         as_attachment=True,
         download_name=f"LADS_{run_id}.pdf",
     )
+
+
+@app.route("/runs/<run_id>/scan.log")
+def download_scan_log(run_id):
+    from flask import send_file
+    log_path = os.path.join(RUNS_DIR, run_id, "scan.log")
+    if not os.path.exists(log_path):
+        return "로그 파일이 없습니다.", 404
+    return send_file(log_path, mimetype="text/plain", as_attachment=True, download_name=f"LADS_{run_id}.log")
 
 
 if __name__ == "__main__":

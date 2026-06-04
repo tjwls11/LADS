@@ -92,10 +92,12 @@ def _execute_single(t: dict, session: requests.Session, timeout: int, delay: flo
     base: dict[str, Any] = {
         "id": t.get("id"),
         "point": point,
+        "task_group_id": t.get("task_group_id"),
         "payload": payload,
         "inject_mode": inject_mode,
         "inject_location": inject_location,
         "inject_param": inject_param,
+        "base_value": t.get("base_value"),
         "meta": t.get("meta") or {},
         "error": None,
     }
@@ -103,13 +105,55 @@ def _execute_single(t: dict, session: requests.Session, timeout: int, delay: flo
     url = t.get("url")
     method = str(t.get("method", "GET")).upper()
 
-    if not url or payload is None or not inject_param:
+    if not url:
         return {**base, "error": "invalid_task"}
 
     base_params = dict(t.get("base_params") or {})
     base_headers = dict(t.get("base_headers") or {})
     base_cookies = dict(t.get("base_cookies") or {})
-    base_value = str(t.get("base_value") or "")
+
+    # noop: payload 주입 없이 원본 요청만 전송 (baseline/safe 요청용)
+    if inject_mode == "noop":
+        started = time.perf_counter()
+        try:
+            resp = session.get(
+                url,
+                params=base_params or None,
+                headers=base_headers,
+                cookies=base_cookies,
+                timeout=timeout,
+                allow_redirects=True,
+            )
+            elapsed = time.perf_counter() - started
+            try:
+                body_text = resp.text
+            except Exception:
+                body_text = None
+            return {
+                **base,
+                "url": url,
+                "method": "GET",
+                "status": resp.status_code,
+                "length": len(resp.content) if resp.content is not None else None,
+                "elapsed": round(elapsed, 3),
+                "response_body": body_text[:20000] if body_text else None,
+            }
+        except requests.Timeout:
+            elapsed = time.perf_counter() - started
+            return {**base, "url": url, "method": "GET", "status": None, "length": 0,
+                    "elapsed": round(elapsed, 3), "response_body": None, "error": "timeout"}
+        except Exception as e:
+            elapsed = time.perf_counter() - started
+            return {**base, "url": url, "method": "GET", "status": None, "length": 0,
+                    "elapsed": round(elapsed, 3), "response_body": None, "error": f"exception:{type(e).__name__}"}
+
+    if payload is None or not inject_param:
+        return {**base, "error": "invalid_task"}
+
+    base_params = dict(t.get("base_params") or {})
+    base_headers = dict(t.get("base_headers") or {})
+    base_cookies = dict(t.get("base_cookies") or {})
+    base_value   = str(t.get("base_value") or "")
 
     if t.get("needs_csrf_refresh") and method == "POST":
         src = t.get("source_url", "")
@@ -257,7 +301,6 @@ def execute(
 
     total = len(tasks)
 
-    # 순서 보존: 인덱스 기반 pre-allocated 리스트
     results: list[dict | None] = [None] * total
     _lock = threading.Lock()
     _done = [0]

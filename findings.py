@@ -14,10 +14,24 @@ FINDINGS_FILE = os.getenv("FINDINGS_FILE", "results/findings.json")
 
 # ── type 상수 ──────────────────────────────────────────────
 # SQLi
-SQLI_CONFIRMED       = "SQLI_CONFIRMED"
+SQLI_CONFIRMED      = "SQLI_CONFIRMED"
+SQLI_SUSPECTED      = "SQLI_SUSPECTED"
+SQLI_CANDIDATE      = "SQLI_CANDIDATE"
+SQLI_INFORMATIONAL  = "SQLI_INFORMATIONAL"
+
+_SQLI_VERDICT_TYPE: dict[str, str] = {
+    "confirmed":     SQLI_CONFIRMED,
+    "suspected":     SQLI_SUSPECTED,
+    "candidate":     SQLI_CANDIDATE,
+    "informational": SQLI_INFORMATIONAL,
+}
 
 # XSS
+XSS_VERIFIED         = "XSS_VERIFIED"
 XSS_CONFIRMED        = "XSS_CONFIRMED"
+XSS_REFLECTED        = "XSS_REFLECTED"
+XSS_STORED_REFLECTED = "XSS_STORED_REFLECTED"
+XSS_SUSPICIOUS       = "XSS_SUSPICIOUS"
 
 # BAC
 BAC_SUSPECTED_LOW    = "BAC_SUSPECTED_LOW"
@@ -87,6 +101,35 @@ def make_finding(
     return finding
 
 
+def sqli_finding_from_verdict(verdict: dict) -> dict | None:
+    v = (verdict.get("verdict") or "informational").lower()
+    if v == "informational":
+        return None
+
+    evidence  = verdict.get("evidence") or {}
+    target    = evidence.get("target") or {}
+    requests  = evidence.get("requests") or []
+    attack_req = next((r for r in requests if r.get("role") == "attack"), {})
+
+    return make_finding(
+        module=MODULE_SQLI,
+        type=_SQLI_VERDICT_TYPE.get(v, SQLI_CANDIDATE),
+        category=verdict.get("category") or "unknown",
+        url=target.get("url") or "",
+        param=target.get("param"),
+        payload=attack_req.get("payload"),
+        status=attack_req.get("status"),
+        confidence=(verdict.get("confidence") or LOW).lower(),
+        evidence=verdict.get("reason") or "",
+        extra={
+            "verdict":       v,
+            "title":         verdict.get("title") or "",
+            "task_group_id": verdict.get("task_group_id") or "",
+            "evidence":      evidence,
+        },
+    )
+
+
 # ── 모듈별 헬퍼 ───────────────────────────────────────────
 
 def sqli_finding(
@@ -96,12 +139,13 @@ def sqli_finding(
     payload:   str,
     status:    int,
     evidence:  str,
-    confidence: str = HIGH,
+    confidence: str = MEDIUM,
+    finding_type: str = SQLI_SUSPECTED,
 ) -> dict:
     """SQLi finding 생성 헬퍼"""
     return make_finding(
         module=MODULE_SQLI,
-        type=SQLI_CONFIRMED,
+        type=finding_type,
         category=category,
         url=url,
         param=param,
@@ -119,12 +163,13 @@ def xss_finding(
     payload:   str,
     status:    int,
     evidence:  str,
-    confidence: str = HIGH,
+    confidence: str = MEDIUM,
+    finding_type: str = XSS_REFLECTED,
 ) -> dict:
     """XSS finding 생성 헬퍼"""
     return make_finding(
         module=MODULE_XSS,
-        type=XSS_CONFIRMED,
+        type=finding_type,
         category=category,
         url=url,
         param=param,

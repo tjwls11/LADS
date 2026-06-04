@@ -96,6 +96,15 @@ def _vuln_type(r: dict) -> str:
     return ((r.get("meta") or {}).get("vuln_type") or "").lower()
 
 
+# task_group_id가 있으면 우선 사용하고 없으면 기존 묶음 키를 반환
+def _group_key(r: dict, fallback_category: str) -> tuple | str:
+    return r.get("task_group_id") or (
+        r.get("url"),
+        r.get("inject_param"),
+        fallback_category,
+    )
+
+
 def _body_length(r: dict) -> int:
     body = r.get("response_body") or ""
     return len(body)
@@ -163,7 +172,7 @@ def detect_boolean_group(results: list[dict]) -> list[dict]:
 
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in sqli_results:
-        key = (r.get("url"), r.get("inject_param"))
+        key = _group_key(r, "boolean")
         groups[key].append(r)
 
     detected: list[dict] = []
@@ -243,7 +252,7 @@ def detect_probe_group(results: list[dict]) -> list[dict]:
 
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in probe_results:
-        key = (r.get("url"), r.get("inject_param"))
+        key = _group_key(r, "boolean")
         groups[key].append(r)
 
     detected: list[dict] = []
@@ -294,7 +303,7 @@ def detect_orderby_group(results: list[dict]) -> list[dict]:
 
     groups: dict[tuple, list[dict]] = defaultdict(list)
     for r in orderby_results:
-        key = (r.get("url"), r.get("inject_param"))
+        key = _group_key(r, "order_by")
         groups[key].append(r)
 
     detected: list[dict] = []
