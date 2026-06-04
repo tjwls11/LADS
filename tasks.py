@@ -176,6 +176,10 @@ def _task_bac_stream(run_path_fn, target_url=None, emit_progress=None):
     save_findings(findings, bac_findings_file)
     bac_cnt = sum(1 for f in findings if f.get("module") == "bac")
     print(f"[BAC] 분석 완료: findings={len(findings)}, bac={bac_cnt}")
+    _prog(emit_progress, 95)
+
+    # ── misconfig (BAC 완료 후 자동 실행) ──
+    _task_misconfig(run_path_fn, target_url, emit_progress)
     _prog(emit_progress, 100)
 
 
@@ -285,7 +289,7 @@ def _task_execute(run_path_fn, emit_progress=None):
         _prog(emit_progress, 35 + int(done / max(total, 1) * 55))
 
     print(f"[EXEC] start: {len(tasks)} tasks")
-    results = execute(tasks, timeout=10, delay=0.0, output_file=exec_file, progress_callback=_execute_progress)
+    results = execute(tasks, timeout=5, delay=0.3, output_file=exec_file, progress_callback=_execute_progress)
     ok      = sum(1 for r in results if r.get("error") is None)
     timeout = sum(1 for r in results if r.get("error") == "timeout")
     err     = sum(1 for r in results if r.get("error") and r.get("error") != "timeout")
@@ -431,11 +435,6 @@ def _task_main_stream(run_path_fn, target_url, payloads_file, payloads_meta_file
         _task_validate(run_path_fn, emit_progress)
         _prog(emit_progress, 95)
     print(f"__TIMING__validate:{time.perf_counter() - _t:.1f}")
-
-    # ── misconfig (직렬 실행) ──
-    _t = time.perf_counter()
-    _task_misconfig(run_path_fn, target_url, emit_progress)
-    print(f"__TIMING__misconfig:{time.perf_counter() - _t:.1f}")
 
     print(f"__TIMING__total:{time.perf_counter() - _total_start:.1f}")
     _prog(emit_progress, 100)

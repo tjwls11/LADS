@@ -114,9 +114,7 @@ if _TARGETS:
 _current_run_id: str | None = None
 
 app = Flask(__name__, template_folder='web/templates', static_folder='web/static')
-# 개발 중 템플릿/정적 파일이 "안 바뀌는" 문제 방지용 설정.
-# - debug가 꺼져 있어도 templates 변경이 즉시 반영되도록 함
-# - 정적 파일 캐시를 줄여(0초) 새로고침 시 바로 반영되도록 함
+
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 app.jinja_env.auto_reload = True

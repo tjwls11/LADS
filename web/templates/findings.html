@@ -128,13 +128,13 @@ block content %}
         id="results-table"
       >
         <thead>
-          <tr class="text-[13px] font-bold text-slate-500">
-            <th class="border-b border-surface-line px-3 pb-3 min-w-[96px] whitespace-nowrap">탐지 상태</th>
-            <th class="border-b border-surface-line px-3 pb-3">취약점 유형</th>
-            <th class="border-b border-surface-line px-3 pb-3">대상</th>
+          <tr class="text-[13px] font-bold text-slate-500" id="findings-thead">
+            <th class="sortable border-b border-surface-line px-3 pb-3 min-w-[96px] whitespace-nowrap select-none">탐지 상태 <span class="sort-icon text-slate-300">↕</span></th>
+            <th class="sortable border-b border-surface-line px-3 pb-3 select-none">취약점 유형 <span class="sort-icon text-slate-300">↕</span></th>
+            <th class="sortable border-b border-surface-line px-3 pb-3 select-none">대상 <span class="sort-icon text-slate-300">↕</span></th>
             <th class="border-b border-surface-line px-3 pb-3">파라미터</th>
             <th class="border-b border-surface-line px-3 pb-3">페이로드</th>
-            <th class="border-b border-surface-line px-3 pb-3">상태</th>
+            <th class="sortable border-b border-surface-line px-3 pb-3 select-none">상태 <span class="sort-icon text-slate-300">↕</span></th>
             <th class="border-b border-surface-line px-3 pb-3">근거</th>
           </tr>
         </thead>
@@ -183,8 +183,7 @@ block content %}
               {% else %}-{% endif %}
             </td>
             <td
-              class="js-expandable max-w-[260px] truncate border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-600 cursor-pointer select-none"
-              title="{{ r.url }}"
+              class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-600 break-all"
             >
               {{ r.url or r.point }}
             </td>
@@ -194,8 +193,7 @@ block content %}
               {{ r.inject_param or '-' }}
             </td>
             <td
-              class="js-expandable max-w-[360px] truncate border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-700 cursor-pointer select-none"
-              title="{{ r.payload }}"
+              class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-700 break-all"
             >
               {{ r.payload }}
             </td>
@@ -207,7 +205,7 @@ block content %}
             <td
               class="border-b border-slate-100 px-3 py-3 text-slate-600"
             >
-              <div class="max-w-[340px] truncate" title="{{ r._evidence }}">{{ r._evidence or '' }}</div>
+              <div class="break-all">{{ r._evidence or '' }}</div>
               {% if cves %}
               <span class="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-blue-500">
                 <span class="material-symbols-outlined text-[13px]">expand_more</span>
@@ -274,7 +272,7 @@ block content %}
               </span>
             </td>
             <td
-              class="js-expandable max-w-[260px] truncate border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-600 cursor-pointer select-none"
+              class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-600 break-all"
             >
               {{ f.url or f.point }}
             </td>
@@ -284,8 +282,7 @@ block content %}
               {{ f.param or '-' }}
             </td>
             <td
-              class="js-expandable max-w-[360px] truncate border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-700 cursor-pointer select-none"
-              title="{{ f.payload }}"
+              class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-700 break-all"
             >
               {{ f.payload }}
             </td>
@@ -295,8 +292,7 @@ block content %}
               {{ f.status or '-' }}
             </td>
             <td
-              class="max-w-[380px] truncate border-b border-slate-100 px-3 py-3 text-slate-600"
-              title="{{ f.evidence }}"
+              class="border-b border-slate-100 px-3 py-3 text-slate-600 break-all"
             >
               {{ f.evidence }}
             </td>
@@ -311,16 +307,30 @@ block content %}
 </section>
 {% endblock %} {% block scripts %}
 <style>
-  /* 기본: 줄바꿈 없이 한 줄(필요 시 ...), 길면 호버(title) 또는 클릭 펼치기 */
-  #results-table th,
-  #results-table td {
-    white-space: nowrap;
+  #results-table th { white-space: nowrap; position: relative; }
+  .sortable { cursor: pointer; }
+  .sortable:hover { color: #334155; }
+  .sort-asc .sort-icon::after  { content: ' ↑'; color: #1e293b; }
+  .sort-desc .sort-icon::after { content: ' ↓'; color: #1e293b; }
+  .sort-asc .sort-icon, .sort-desc .sort-icon { font-size: 0; }
+  .sort-asc .sort-icon::after, .sort-desc .sort-icon::after { font-size: 13px; }
+  .col-resizer {
+    position: absolute; right: -3px; top: 10%;
+    width: 8px; height: 80%;
+    cursor: col-resize; user-select: none; z-index: 10;
+    display: flex; align-items: center; justify-content: center;
   }
-  #results-table td.js-expandable.is-expanded {
-    white-space: normal;
-    overflow: visible;
-    text-overflow: clip;
-    word-break: break-all;
+  .col-resizer::after {
+    content: '';
+    display: block;
+    width: 2px; height: 100%;
+    background: #cbd5e1;
+    border-radius: 2px;
+    transition: background .15s, width .15s;
+  }
+  .col-resizer:hover::after, .col-resizer.resizing::after {
+    background: #3b82f6;
+    width: 3px;
   }
 </style>
 <script>
@@ -361,5 +371,460 @@ block content %}
     if (!el) return
     el.classList.toggle('is-expanded')
   })
+
+  // ── 컬럼 리사이즈 ──
+  ;(function () {
+    var table = document.getElementById('results-table');
+    if (!table) return;
+    var ths = Array.from(table.querySelectorAll('thead th'));
+    ths.forEach(function (th) {
+      var r = document.createElement('div');
+      r.className = 'col-resizer';
+      th.appendChild(r);
+      r.addEventListener('mousedown', function (e) {
+        e.preventDefault(); e.stopPropagation();
+        ths.forEach(function (t) { t.style.width = t.getBoundingClientRect().width + 'px'; });
+        table.style.tableLayout = 'fixed';
+        var sx = e.pageX, sw = th.getBoundingClientRect().width;
+        r.classList.add('resizing');
+        function mv(e) { var w = sw + (e.pageX - sx); if (w > 40) th.style.width = w + 'px'; }
+        function up() { r.classList.remove('resizing'); document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); }
+        document.addEventListener('mousemove', mv);
+        document.addEventListener('mouseup', up);
+      });
+      r.addEventListener('click', function (e) { e.stopPropagation(); });
+    });
+  })();
+
+  // ── 상세 슬라이드 패널 ──
+  ;(function () {
+    var panel = document.createElement('div');
+    panel.id = 'fdp';
+    panel.style.cssText = [
+      'position:fixed','top:0','right:0','width:420px','height:100vh',
+      'background:#fff','border-left:1px solid #e2e8f0',
+      'box-shadow:-4px 0 20px rgba(0,0,0,0.08)',
+      'transform:translateX(100%)','transition:transform .22s cubic-bezier(.4,0,.2,1)',
+      'z-index:50','display:flex','flex-direction:column','overflow:hidden'
+    ].join(';');
+
+    var typeColors = { xss:'bg-amber-100 text-amber-800', sqli:'bg-red-100 text-red-800', bac:'bg-purple-100 text-purple-800', misconfig:'bg-blue-100 text-blue-800' };
+    function typeClass(t) { var k=(t||'').toLowerCase(); for (var key in typeColors) { if (k.indexOf(key)!==-1) return typeColors[key]; } return 'bg-slate-100 text-slate-700'; }
+
+    panel.innerHTML = [
+      '<div style="padding:14px 20px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;background:#f8fafc;">',
+        '<span id="fdp-type" class="rounded px-2 py-1 font-mono text-[12px] font-extrabold"></span>',
+        '<button id="fdp-close" style="background:none;border:none;cursor:pointer;color:#94a3b8;font-size:20px;line-height:1;padding:2px 4px;">✕</button>',
+      '</div>',
+      '<div id="fdp-body" style="flex:1;overflow-y:auto;padding:20px;"></div>'
+    ].join('');
+    document.body.appendChild(panel);
+
+    document.getElementById('fdp-close').addEventListener('click', function() { panel.style.transform='translateX(100%)'; });
+    document.addEventListener('keydown', function(e) { if (e.key==='Escape') panel.style.transform='translateX(100%)'; });
+
+    function field(label, val) {
+      if (!val || val==='-') return '';
+      return '<div style="margin-bottom:14px;">'+
+        '<div style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:.05em;margin-bottom:4px;">'+label+'</div>'+
+        '<div style="font-size:13px;color:#1e293b;word-break:break-all;line-height:1.6;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;font-family:monospace;">'+val+'</div>'+
+      '</div>';
+    }
+
+    function cveTable(cves) {
+      if (!cves || !cves.length) return '';
+      var rows = cves.map(function(c) {
+        var sc = c.severity==='CRITICAL'?'color:#b91c1c':c.severity==='HIGH'?'color:#c2410c':c.severity==='MEDIUM'?'color:#92400e':'color:#475569';
+        return '<tr><td style="padding:5px 8px;font-family:monospace;font-weight:700;"><a href="https://nvd.nist.gov/vuln/detail/'+c.id+'" target="_blank" style="color:#2563eb;text-decoration:underline;">'+c.id+'</a></td>'+
+          '<td style="padding:5px 8px;font-weight:700;'+sc+'">'+c.severity+'</td>'+
+          '<td style="padding:5px 8px;font-family:monospace;">'+( c.score||'-')+'</td>'+
+          '<td style="padding:5px 8px;color:#475569;">'+( c.description||'-')+'</td></tr>';
+      }).join('');
+      return '<div style="margin-bottom:14px;">'+
+        '<div style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:.05em;margin-bottom:6px;">CVE ('+cves.length+'건)</div>'+
+        '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="color:#94a3b8;font-size:10px;font-weight:700;">'+
+          '<th style="padding:4px 8px;text-align:left;">CVE ID</th><th style="padding:4px 8px;text-align:left;">Severity</th>'+
+          '<th style="padding:4px 8px;text-align:left;">Score</th><th style="padding:4px 8px;text-align:left;">설명</th></tr></thead>'+
+        '<tbody>'+rows+'</tbody></table></div>';
+    }
+
+    // result-row 클릭
+    document.addEventListener('click', function(e) {
+      var tr = e.target.closest('tr.result-row:not(.cve-detail)');
+      if (!tr) return;
+      var c = tr.cells;
+      var status = tr.classList.contains('row-danger') ? '위험' : tr.classList.contains('row-warning') ? '경고' : '안전';
+      var typeTxt = c[1] ? c[1].textContent.trim() : '';
+      var tc = typeClass(typeTxt);
+      document.getElementById('fdp-type').className = 'rounded px-2 py-1 font-mono text-[12px] font-extrabold '+tc;
+      document.getElementById('fdp-type').textContent = typeTxt || status;
+
+      // CVE 데이터: 다음 행이 cve-detail이면 읽기
+      var cveData = [];
+      var next = tr.nextElementSibling;
+      if (next && next.classList.contains('cve-detail')) {
+        var anchors = Array.from(next.querySelectorAll('a[href*="nvd.nist.gov"]'));
+        cveData = anchors.map(function(a) {
+          var row = a.closest('tr');
+          var tds = row ? Array.from(row.querySelectorAll('td')) : [];
+          return { id: a.textContent.trim(), severity: tds[1]?tds[1].textContent.trim():'', score: tds[2]?tds[2].textContent.trim():'', description: tds[3]?tds[3].textContent.trim():'' };
+        });
+      }
+
+      document.getElementById('fdp-body').innerHTML =
+        '<div style="margin-bottom:14px;"><span style="font-size:11px;font-weight:700;padding:3px 8px;border-radius:99px;background:' + (tr.classList.contains('row-danger')?'#fee2e2;color:#b91c1c':tr.classList.contains('row-warning')?'#fef3c7;color:#92400e':'#d1fae5;color:#065f46') + ';">' + status + '</span></div>' +
+        field('URL', c[2]?c[2].textContent.trim():'') +
+        field('파라미터', c[3]?c[3].textContent.trim():'') +
+        field('페이로드', c[4]?c[4].textContent.trim():'') +
+        field('상태 코드', c[5]?c[5].textContent.trim():'') +
+        field('근거', c[6]?c[6].textContent.trim():'') +
+        cveTable(cveData);
+
+      panel.style.transform = 'translateX(0)';
+    });
+
+    document.querySelectorAll('tr.result-row:not(.cve-detail)').forEach(function(tr) { tr.style.cursor='pointer'; });
+  })();
+
+  // ── 구 코드 제거 ──
+  ;(function () { return; // 전부 아래 새 코드로 대체
+    var table = document.getElementById('results-table');
+    if (!table) return;
+    var tbody = table.querySelector('tbody');
+    var allRows = Array.from(tbody.querySelectorAll('tr'));
+    if (!allRows.length) return;
+
+    // 메인 행 + CVE 행 쌍으로 묶기
+    var pairs = [];
+    for (var i = 0; i < allRows.length; i++) {
+      if (!allRows[i].classList.contains('cve-detail')) {
+        var pair = [allRows[i]];
+        if (i + 1 < allRows.length && allRows[i+1].classList.contains('cve-detail')) { pair.push(allRows[++i]); }
+        pairs.push(pair);
+      }
+    }
+
+    // URL(index 2) 기준 그룹핑
+    var groups = {}, order = [];
+    pairs.forEach(function(pair) {
+      var cell = pair[0].cells[2];
+      var url = cell ? cell.textContent.trim() : '(URL 없음)';
+      if (!groups[url]) { groups[url] = []; order.push(url); }
+      groups[url].push(pair);
+    });
+    if (!order.length || order.length < 5) return;  // URL 5개 미만이면 일반 테이블
+
+    var tableWrap = table.parentElement;
+    var flex = document.createElement('div');
+    flex.style.cssText = 'display:flex; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; background:#fff;';
+
+    var left = document.createElement('div');
+    left.style.cssText = 'width:360px; flex-shrink:0; overflow-y:auto; border-right:1px solid #e2e8f0;';
+
+    var leftHeader = document.createElement('div');
+    leftHeader.style.cssText = 'padding:10px 16px; border-bottom:1px solid #e2e8f0; background:#f8fafc; display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:1;';
+    leftHeader.innerHTML =
+      '<span style="font-size:12px; font-weight:800; color:#0f172a;">대상 URL</span>' +
+      '<span id="md-url-cnt2" style="font-size:11px; font-weight:700; color:#64748b; background:#e2e8f0; border-radius:99px; padding:1px 8px;">' + order.length + '</span>';
+    left.appendChild(leftHeader);
+
+    var right = document.createElement('div');
+    right.style.cssText = 'flex:1; overflow:auto; min-width:0;';
+
+    tableWrap.insertBefore(flex, table);
+    right.appendChild(table);
+    flex.appendChild(left);
+    flex.appendChild(right);
+
+    var selected = null, items = {}, currentMode = 'all';
+
+    function itemBase() { return 'padding:10px 16px; cursor:pointer; border-bottom:1px solid #f1f5f9; transition:background .1s;'; }
+    function itemActive() { return 'padding:10px 16px; cursor:pointer; border-bottom:1px solid #f1f5f9; background:#eff6ff; border-left:3px solid #3b82f6;'; }
+
+    function select(url) {
+      if (selected && items[selected]) items[selected].style.cssText = itemBase();
+      selected = url;
+      if (items[url]) items[url].style.cssText = itemActive();
+      applyDisplay();
+    }
+
+    function applyDisplay() {
+      Object.keys(groups).forEach(function(u) {
+        groups[u].forEach(function(pair) {
+          var urlOk = (u === selected);
+          var mod = (pair[0].dataset && pair[0].dataset.vuln_type) ? pair[0].dataset.vuln_type : (pair[0].textContent || '');
+          var typeOk = currentMode === 'all' || mod.toLowerCase().indexOf(currentMode) !== -1;
+          pair.forEach(function(r) { r.style.display = (urlOk && typeOk) ? '' : 'none'; });
+        });
+      });
+    }
+
+    function rebuildLeft() {
+      Array.from(left.children).forEach(function(c) { if (c !== leftHeader) c.remove(); });
+      items = {}; selected = null;
+      var visible = 0;
+
+      var sorted = order.map(function(url) {
+        var cnt = groups[url].filter(function(pair) {
+          var mod = (pair[0].dataset && pair[0].dataset.vuln_type) ? pair[0].dataset.vuln_type : (pair[0].textContent || '');
+          return currentMode === 'all' || mod.toLowerCase().indexOf(currentMode) !== -1;
+        }).length;
+        return { url: url, cnt: cnt };
+      }).filter(function(o) { return o.cnt > 0; })
+        .sort(function(a, b) { return b.cnt - a.cnt; });
+
+      var main = sorted.filter(function(o) { return o.cnt >= 3; });
+      var minor = sorted.filter(function(o) { return o.cnt < 3; });
+
+      function addItem(url, cnt, dim) {
+        visible++;
+        var item = document.createElement('div');
+        item.style.cssText = itemBase() + (dim ? 'opacity:0.6;' : '');
+        item.innerHTML =
+          '<div style="font-family:monospace; font-size:11px; font-weight:600; color:#334155; word-break:break-all; line-height:1.5; margin-bottom:5px;">' + url + '</div>' +
+          '<span style="display:inline-block; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:4px; padding:1px 7px; font-size:10px; font-weight:700; color:#64748b;">' + cnt + '건</span>';
+        item.addEventListener('mouseenter', function() { if (url !== selected) item.style.background = '#f8fafc'; });
+        item.addEventListener('mouseleave', function() { if (url !== selected) item.style.background = ''; });
+        item.addEventListener('click', function() { select(url); });
+        items[url] = item;
+        left.appendChild(item);
+        if (!selected) select(url);
+      }
+
+      main.forEach(function(o) { addItem(o.url, o.cnt, false); });
+
+      if (minor.length > 0) {
+        var sep = document.createElement('div');
+        sep.style.cssText = 'padding:5px 12px; font-size:10px; font-weight:700; color:#94a3b8; background:#f8fafc; border-top:1px solid #e2e8f0; border-bottom:1px solid #e2e8f0; letter-spacing:.04em;';
+        sep.textContent = '기타 (건수 적음)';
+        left.appendChild(sep);
+        minor.forEach(function(o) { addItem(o.url, o.cnt, true); });
+      }
+
+      var cntEl = document.getElementById('md-url-cnt2');
+      if (cntEl) cntEl.textContent = visible;
+    }
+
+    rebuildLeft();
+
+    // 필터 버튼 연동
+    var _origFT = window.filterTable;
+    window.filterTable = function(mode) {
+      currentMode = mode === 'danger' ? '' : (mode === 'all' ? 'all' : mode);
+      rebuildLeft();
+      applyDisplay();
+      document.querySelectorAll('.filter-btn').forEach(function(btn) { btn.className = 'filter-btn rounded-sm border border-surface-line bg-white px-4 py-2 text-[13px] font-extrabold text-slate-700 hover:bg-slate-50'; });
+      var active = document.getElementById('btn-' + mode);
+      if (active) active.className = 'filter-btn rounded-sm border border-slate-800 bg-slate-800 px-4 py-2 text-[13px] font-extrabold text-white';
+    };
+  })();
+
+  // ── 컬럼 정렬 ──
+  ;(function () {
+    var thead = document.getElementById('findings-thead');
+    if (!thead) return;
+    var table = thead.closest('table');
+    var tbody = table.querySelector('tbody');
+    var sortCol = -1, sortAsc = true;
+
+    thead.querySelectorAll('th.sortable').forEach(function (th) {
+      var colIdx = Array.from(th.parentElement.children).indexOf(th);
+      th.addEventListener('click', function () {
+        sortAsc = (sortCol === colIdx) ? !sortAsc : true;
+        sortCol = colIdx;
+        thead.querySelectorAll('th').forEach(function (h) {
+          h.classList.remove('sort-asc', 'sort-desc');
+        });
+        th.classList.add(sortAsc ? 'sort-asc' : 'sort-desc');
+
+        // 메인 행과 CVE 상세 행을 쌍으로 묶어서 정렬
+        var pairs = [];
+        var allRows = Array.from(tbody.querySelectorAll('tr'));
+        for (var i = 0; i < allRows.length; i++) {
+          if (!allRows[i].classList.contains('cve-detail')) {
+            var pair = [allRows[i]];
+            if (i + 1 < allRows.length && allRows[i + 1].classList.contains('cve-detail')) {
+              pair.push(allRows[i + 1]);
+              i++;
+            }
+            pairs.push(pair);
+          }
+        }
+        pairs.sort(function (a, b) {
+          var av = (a[0].cells[colIdx] && a[0].cells[colIdx].textContent.trim()) || '';
+          var bv = (b[0].cells[colIdx] && b[0].cells[colIdx].textContent.trim()) || '';
+          var an = parseFloat(av), bn = parseFloat(bv);
+          if (!isNaN(an) && !isNaN(bn)) return sortAsc ? an - bn : bn - an;
+          return sortAsc ? av.localeCompare(bv, 'ko') : bv.localeCompare(av, 'ko');
+        });
+        pairs.forEach(function (pair) {
+          pair.forEach(function (row) { tbody.appendChild(row); });
+        });
+      });
+    });
+  })();
+
+  // ── URL별 구분선 ──
+  ;(function () {
+    var table = document.getElementById('results-table-DISABLED'); // 마스터디테일 비활성
+    if (!table) return;
+    var tbody = table.querySelector('tbody');
+
+    // 메인 행 + CVE 행 쌍으로 묶기
+    var allPairs = [], allRows = Array.from(tbody.querySelectorAll('tr'));
+    for (var i = 0; i < allRows.length; i++) {
+      if (allRows[i].classList.contains('cve-detail')) continue;
+      var pair = [allRows[i]];
+      if (i + 1 < allRows.length && allRows[i+1].classList.contains('cve-detail')) pair.push(allRows[++i]);
+      allPairs.push(pair);
+    }
+    if (!allPairs.length) return;
+
+    var groups = {}, order = [];
+    allPairs.forEach(function(pair) {
+      var url = pair[0].cells[2] ? pair[0].cells[2].textContent.trim() : '';
+      if (!groups[url]) { groups[url] = []; order.push(url); }
+      groups[url].push(pair);
+    });
+    if (order.length < 2) return;
+
+    var wrap = table.parentElement;
+    var layout = document.createElement('div');
+    layout.style.cssText = 'display:flex;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;background:#fff;';
+
+    var left = document.createElement('div');
+    left.style.cssText = 'width:280px;flex-shrink:0;border-right:1px solid #e2e8f0;overflow-y:auto;';
+    left.innerHTML = '<div style="padding:10px 14px;border-bottom:1px solid #e2e8f0;background:#f8fafc;position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;"><span style="font-size:11px;font-weight:800;color:#475569;">대상 URL</span><span id="lhdr-cnt2" style="font-size:10px;font-weight:700;color:#64748b;background:#e2e8f0;border-radius:99px;padding:1px 7px;">' + order.length + '</span></div>';
+
+    var right = document.createElement('div');
+    right.style.cssText = 'flex:1;overflow:auto;min-width:0;';
+
+    wrap.insertBefore(layout, table);
+    right.appendChild(table);
+    layout.appendChild(left);
+    layout.appendChild(right);
+
+    var selected = null, urlItems = {}, curMode = 'all';
+
+    function pairTypeOk(pair) {
+      var r = pair[0];
+      if (curMode === 'all') return true;
+      if (curMode === 'danger')  return r.classList.contains('row-danger');
+      if (curMode === 'warning') return r.classList.contains('row-warning');
+      if (curMode === 'safe')    return r.classList.contains('row-safe');
+      return true;
+    }
+
+    function applyDisplay() {
+      allPairs.forEach(function(pair) {
+        var url = pair[0].cells[2] ? pair[0].cells[2].textContent.trim() : '';
+        var show = url === selected && pairTypeOk(pair);
+        pair.forEach(function(r) {
+          r.style.display = (show && !r.classList.contains('cve-detail')) ? '' : 'none';
+        });
+      });
+      syncCounts();
+    }
+
+    function syncCounts() {
+      var vis = 0;
+      order.forEach(function(url) {
+        var cnt = groups[url].filter(pairTypeOk).length;
+        var el = urlItems[url];
+        if (!el) return;
+        el.style.display = cnt > 0 ? '' : 'none';
+        if (cnt > 0) { vis++; el.querySelector('.uc').textContent = cnt + '건'; }
+      });
+      var c = document.getElementById('lhdr-cnt2');
+      if (c) c.textContent = vis;
+      if (selected && urlItems[selected] && urlItems[selected].style.display === 'none') {
+        var first = order.find(function(u) { return urlItems[u] && urlItems[u].style.display !== 'none'; });
+        if (first) pick(first);
+      }
+    }
+
+    function itemCss(active) {
+      return 'padding:9px 14px;cursor:pointer;border-bottom:1px solid #f1f5f9;border-left:3px solid ' +
+        (active ? '#3b82f6;background:#eff6ff;' : 'transparent;');
+    }
+
+    function pick(url) {
+      if (selected && urlItems[selected]) urlItems[selected].style.cssText = itemCss(false);
+      selected = url;
+      urlItems[url].style.cssText = itemCss(true);
+      applyDisplay();
+    }
+
+    order.forEach(function(url, i) {
+      var item = document.createElement('div');
+      item.style.cssText = itemCss(false);
+      item.innerHTML =
+        '<div style="font-family:monospace;font-size:11px;font-weight:600;color:#334155;word-break:break-all;line-height:1.5;margin-bottom:3px;">' + url + '</div>' +
+        '<span class="uc" style="font-size:10px;font-weight:700;color:#64748b;background:#e2e8f0;border-radius:4px;padding:1px 6px;">' + groups[url].length + '건</span>';
+      item.addEventListener('mouseenter', function() { if (url !== selected) item.style.background = '#f8fafc'; });
+      item.addEventListener('mouseleave', function() { if (url !== selected) item.style.background = ''; });
+      item.addEventListener('click', function() { pick(url); });
+      urlItems[url] = item;
+      left.appendChild(item);
+      if (i === 0) pick(url);
+    });
+
+    // filterTable 연동
+    var _ft = window.filterTable;
+    window.filterTable = function(mode) {
+      curMode = mode;
+      applyDisplay();
+      document.querySelectorAll('.filter-btn').forEach(function(b) { b.className = 'filter-btn rounded-sm border border-surface-line bg-white px-4 py-2 text-[13px] font-extrabold text-slate-700 hover:bg-slate-50'; });
+      var a = document.getElementById('btn-' + mode);
+      if (a) a.className = 'filter-btn rounded-sm border border-slate-800 bg-slate-800 px-4 py-2 text-[13px] font-extrabold text-white';
+    };
+  })();
+
+  // ── URL별 구분선 (findings) ──
+  ;(function () {
+    function addSeparators() {
+      var table = document.getElementById('results-table');
+      if (!table) return;
+      var tbody = table.querySelector('tbody');
+      var cols = table.querySelector('thead tr') ? table.querySelector('thead tr').cells.length : 7;
+
+      function rebuild() {
+        Array.from(tbody.querySelectorAll('.url-sep')).forEach(function(s) { s.remove(); });
+
+        var rows = Array.from(tbody.querySelectorAll('tr:not(.url-sep):not(.cve-detail)'))
+          .filter(function(r) { return r.style.display !== 'none'; });
+
+        var groups = {}, order = [];
+        rows.forEach(function(r) {
+          var url = r.cells[2] ? r.cells[2].textContent.trim() : '';
+          if (!groups[url]) { groups[url] = []; order.push(url); }
+          groups[url].push(r);
+        });
+
+        order.forEach(function(url) {
+          var cnt = groups[url].length;
+          var sep = document.createElement('tr');
+          sep.className = 'url-sep';
+          sep.innerHTML = '<td colspan="' + cols + '" style="padding:7px 14px;background:#f8fafc;border-top:2px solid #e2e8f0;border-bottom:1px solid #e2e8f0;">' +
+            '<div style="display:flex;align-items:center;gap:8px;">' +
+              '<span style="font-family:monospace;font-size:12px;font-weight:700;color:#334155;">' + url + '</span>' +
+              '<span style="background:#e2e8f0;border-radius:4px;padding:1px 7px;font-size:10px;font-weight:700;color:#64748b;">' + cnt + '건</span>' +
+            '</div>' +
+          '</td>';
+          tbody.insertBefore(sep, groups[url][0]);
+        });
+      }
+
+      rebuild();
+
+      var _ft = window.filterTable;
+      window.filterTable = function(mode) {
+        _ft && _ft(mode);
+        setTimeout(rebuild, 0);
+      };
+    }
+
+    addSeparators();
+  })();
 </script>
 {% endblock %}

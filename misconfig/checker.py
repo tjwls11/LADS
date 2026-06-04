@@ -262,10 +262,7 @@ def _parse_product_version(header_value: str) -> tuple[str, str, str] | None:
 
 
 def _query_nvd_cves(vendor: str, product: str, version: str) -> list[dict]:
-    """
-    NVD API v2 — CPE 기반 CVE 조회.
-    환경변수 NVD_API_KEY 있으면 rate limit 완화 (50req/30s).
-    """
+
     cpe_name = f"cpe:2.3:a:{vendor}:{product}:{version}:*:*:*:*:*:*:*"
     params   = {"cpeName": cpe_name, "resultsPerPage": _NVD_RESULTS_PER_PAGE}
     headers  = {}

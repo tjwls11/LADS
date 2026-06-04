@@ -275,6 +275,27 @@
 
 {% block scripts %}
 <style>
+  #findings-table th, #exec-table th { position: relative; }
+  tr.finding-row { cursor: pointer; }
+  tr.finding-row:hover td { background: #f8fafc; }
+  .col-resizer {
+    position: absolute; right: -3px; top: 10%;
+    width: 8px; height: 80%;
+    cursor: col-resize; user-select: none; z-index: 10;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .col-resizer::after {
+    content: '';
+    display: block;
+    width: 2px; height: 100%;
+    background: #cbd5e1;
+    border-radius: 2px;
+    transition: background .15s, width .15s;
+  }
+  .col-resizer:hover::after, .col-resizer.resizing::after {
+    background: #3b82f6;
+    width: 3px;
+  }
   .detail-filter-btn {
     padding: 5px 12px;
     border-radius: 4px;
@@ -321,5 +342,91 @@
     var active = document.getElementById('ef-' + mode);
     if (active) active.classList.add('active');
   }
+
+  // ── 컬럼 리사이즈 ──
+  function makeResizable(tableId) {
+    var table = document.getElementById(tableId);
+    if (!table) return;
+    var ths = Array.from(table.querySelectorAll('thead th'));
+    ths.forEach(function (th) {
+      var r = document.createElement('div');
+      r.className = 'col-resizer';
+      th.appendChild(r);
+      r.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        // 드래그 시작 시 모든 컬럼 너비 고정 후 table-layout: fixed 적용
+        ths.forEach(function (t) { t.style.width = t.getBoundingClientRect().width + 'px'; });
+        table.style.tableLayout = 'fixed';
+        var sx = e.pageX;
+        var sw = th.getBoundingClientRect().width;
+        r.classList.add('resizing');
+        function mv(e) {
+          var w = sw + (e.pageX - sx);
+          if (w > 40) th.style.width = w + 'px';
+        }
+        function up() {
+          r.classList.remove('resizing');
+          document.removeEventListener('mousemove', mv);
+          document.removeEventListener('mouseup', up);
+        }
+        document.addEventListener('mousemove', mv);
+        document.addEventListener('mouseup', up);
+      });
+      r.addEventListener('click', function (e) { e.stopPropagation(); });
+    });
+  }
+  makeResizable('findings-table');
+  makeResizable('exec-table');
+
+  // ── URL별 구분선 ──
+  ;(function () {
+    function addSeparators(tableId, urlCol) {
+      var table = document.getElementById(tableId);
+      if (!table) return;
+      var tbody = table.querySelector('tbody');
+      var cols = table.querySelector('thead tr') ? table.querySelector('thead tr').cells.length : 6;
+
+      function rebuild() {
+        // 기존 구분선 제거
+        Array.from(tbody.querySelectorAll('.url-sep')).forEach(function(s) { s.remove(); });
+
+        // 보이는 행만 URL별로 그룹핑
+        var rows = Array.from(tbody.querySelectorAll('tr:not(.url-sep)'))
+          .filter(function(r) { return r.style.display !== 'none'; });
+
+        var groups = {}, order = [];
+        rows.forEach(function(r) {
+          var url = r.cells[urlCol] ? r.cells[urlCol].textContent.trim() : '';
+          if (!groups[url]) { groups[url] = []; order.push(url); }
+          groups[url].push(r);
+        });
+
+        order.forEach(function(url) {
+          var cnt = groups[url].length;
+          var sep = document.createElement('tr');
+          sep.className = 'url-sep';
+          sep.innerHTML = '<td colspan="' + cols + '" style="padding:7px 14px;background:#f8fafc;border-top:2px solid #e2e8f0;border-bottom:1px solid #e2e8f0;">' +
+            '<div style="display:flex;align-items:center;gap:8px;">' +
+              '<span style="font-family:monospace;font-size:12px;font-weight:700;color:#334155;">' + url + '</span>' +
+              '<span style="background:#e2e8f0;border-radius:4px;padding:1px 7px;font-size:10px;font-weight:700;color:#64748b;">' + cnt + '건</span>' +
+            '</div>' +
+          '</td>';
+          tbody.insertBefore(sep, groups[url][0]);
+        });
+      }
+
+      rebuild();
+
+      // 필터 후 구분선 재생성
+      var _ff = window.filterFindings;
+      window.filterFindings = function(mode) {
+        _ff && _ff(mode);
+        setTimeout(rebuild, 0);
+      };
+    }
+
+    addSeparators('findings-table', 1);
+  })();
 </script>
 {% endblock %}
