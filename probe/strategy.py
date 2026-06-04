@@ -34,26 +34,24 @@ def _sqli_task_group_id(method: str, action_url: str, param_name: str, category:
     return f"sqli:{method.upper()}:{_base_url(action_url)}:{param_name}:{category}"
 
 
-# SQLi 페이로드의 판정 기법 종류를 반환
-def _sqli_category(vtype: str, rec_type: str | None, family: str | None, payload: str | None) -> str | None:
-    text = " ".join(
-        str(v or "").lower()
-        for v in (vtype, rec_type, family, payload)
-    )
-    if "sqli" not in text and "sql" not in text:
+_REC_TYPE_TO_CATEGORY: dict[str, str] = {
+    "BOOLEAN":      "boolean",
+    "ERROR_BASED":  "error",
+    "TIME_BASED":   "time",
+    "SQLI_ORDERBY": "order_by",
+    "UNION":        "union",
+    "SQLI_LOGIN":   "login",
+    "SQLI_FIELD":   "error",
+    "SQLI_STRING":  "error",
+}
+
+
+def _sqli_category(vtype: str, rec_type: str | None) -> str | None:
+    if rec_type and rec_type in _REC_TYPE_TO_CATEGORY:
+        return _REC_TYPE_TO_CATEGORY[rec_type]
+    vt = (vtype or "").lower()
+    if "sqli" not in vt and "sql" not in vt:
         return None
-    if "order" in text:
-        return "order_by"
-    if "union" in text:
-        return "union"
-    if "time" in text or "sleep" in text or "benchmark" in text or "waitfor" in text:
-        return "time"
-    if "bool" in text or "1=1" in text or "1=2" in text or "true" in text or "false" in text:
-        return "boolean"
-    if "error" in text or "extractvalue" in text or "updatexml" in text:
-        return "error"
-    if "login" in text or "auth" in text:
-        return "login"
     return "error"
 
 
@@ -203,7 +201,7 @@ def build_tasks(
             emitted_sqli_groups: set[str] = set()
             point_label = f"{_base_url(action).split('/')[-1]}_{name}"
 
-            def _emit(payload: str, vtype: str, rec_type, family, _label=point_label) -> None:
+            def _emit(payload: str, vtype: str, rec_type, family, rec_role=None, _label=point_label) -> None:
                 nonlocal tid
                 if not payload or payload in used_payloads:
                     return
@@ -211,12 +209,12 @@ def build_tasks(
                     print(f"[PROBE] skipped destructive payload: point={_label}")
                     return
                 used_payloads.add(payload)
-                category = _sqli_category(vtype, rec_type, family, payload)
+                category = _sqli_category(vtype, rec_type)
                 task_group_id = None
                 role = None
                 if category:
                     task_group_id = _sqli_task_group_id(method, action, name, category)
-                    role = _sqli_role(category, payload)
+                    role = rec_role or _sqli_role(category, payload)
                     if task_group_id not in emitted_sqli_groups:
                         emitted_sqli_groups.add(task_group_id)
                         for compare_role, compare_payload in (
@@ -272,6 +270,6 @@ def build_tasks(
 
             for vtype in vuln_types:
                 for rec in _get_baseline_records_by_type(vtype):
-                    _emit(rec.get("payload"), vtype, rec.get("type"), rec.get("family"))
+                    _emit(rec.get("payload"), vtype, rec.get("type"), rec.get("family"), rec.get("role"))
 
     return out

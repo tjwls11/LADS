@@ -386,7 +386,7 @@ def _task_main_stream(run_path_fn, target_url, skip_crawl=False, resume=False, e
     )
     _t = time.perf_counter()
     if resume and findings_done:
-        print("[VALIDATE] 기존 취약점 판정 결과 재사용 (resume)")
+        print("[ANALYZER] 기존 취약점 판정 결과 재사용 (resume)")
         _prog(emit_progress, 95)
     else:
         _task_validate(run_path_fn, emit_progress)
