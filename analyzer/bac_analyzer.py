@@ -26,11 +26,18 @@ _LOGIN_JS_REDIRECT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_LOGIN_JS_REDIRECT_RE = re.compile(
+    r"(?:document\.location|location\.replace|location\.href)\s*[=(]['\"]([^'\"]*login[^'\"]*)['\"]",
+    re.IGNORECASE,
+)
+
 
 def is_login_page(body: str) -> bool:
     if not body:
         return False
     if any(p.search(body) for p in _LOGIN_FORM_PATTERNS):
+        return True
+    if _LOGIN_JS_REDIRECT_RE.search(body):
         return True
     if _LOGIN_JS_REDIRECT_RE.search(body):
         return True
@@ -46,6 +53,12 @@ _ERROR_PATTERNS = [
     re.compile(r'unauthorized', re.IGNORECASE),
     re.compile(r'관리자만\s*(?:접근|이용)', re.IGNORECASE),
     re.compile(r'잘못된\s*접근', re.IGNORECASE),
+    # Gnuboard JS alert 차단 패턴 (alert + window.close / history.back)
+    # 내부 괄호 포함 매칭: alert("포인트(0)..."); history.back()
+    re.compile(
+        r'alert\s*\((?:[^)(]|\([^)]*\))*\)\s*;\s*(?:window\.close|history\.back)',
+        re.IGNORECASE | re.DOTALL,
+    ),
     # Gnuboard JS alert 차단 패턴 (alert + window.close / history.back)
     # 내부 괄호 포함 매칭: alert("포인트(0)..."); history.back()
     re.compile(
@@ -121,6 +134,7 @@ def body_similarity(a: str, b: str) -> float:
     if not a or not b:
         return 0.0
     if hash(a) == hash(b):
+    if hash(a) == hash(b):
         return 1.0
     la, lb = len(a), len(b)
     return min(la, lb) / max(la, lb)
@@ -143,7 +157,9 @@ def _get_scenario(r: dict) -> str:
 
 # ── 단건 판정 ─────────────────────────────────────────────────────
 def validate_bac(test_result: dict) -> tuple[bool, str]:
+def validate_bac(test_result: dict) -> tuple[bool, str]:
     if not test_result:
+        return False, "검증 불가 (입력 없음)"
         return False, "검증 불가 (입력 없음)"
 
     url  = (test_result.get("url") or "").lower()
@@ -155,26 +171,35 @@ def validate_bac(test_result: dict) -> tuple[bool, str]:
     size   = resp["size"]
 
     # 1단계: Forced Browsing
+    # 1단계: Forced Browsing
     if is_sensitive_path(url):
         if status == 200 and size >= MIN_VULN_BODY_SIZE:
+            if not is_login_page(body) and not is_error_page(body, status):
+                return True, f"[VULNERABLE] forced_browsing — 민감 경로 '{url}' 노출 (size={size})"
             if not is_login_page(body) and not is_error_page(body, status):
                 return True, f"[VULNERABLE] forced_browsing — 민감 경로 '{url}' 노출 (size={size})"
 
     # 2단계: 수직적 권한 상승
     if role == "admin":
         return False, "안전함 (admin baseline)"
+        return False, "안전함 (admin baseline)"
     if status != 200:
+        return False, f"안전함 (status={status}, 차단됨)"
         return False, f"안전함 (status={status}, 차단됨)"
     if is_login_page(body):
         return False, "안전함 (로그인 페이지로 리다이렉트됨)"
+        return False, "안전함 (로그인 페이지로 리다이렉트됨)"
     if is_error_page(body, status):
         return False, "안전함 (권한 거부 페이지)"
+        return False, "안전함 (권한 거부 페이지)"
     if size < MIN_VULN_BODY_SIZE:
+        return False, f"안전함 (빈 응답 size={size})"
         return False, f"안전함 (빈 응답 size={size})"
 
     if role in ("guest", "member", "member1", "user"):
         return True, f"[VULNERABLE] vertical_escalation — '{role}' 권한으로 '{url}' 접근 성공 (size={size})"
 
+    return False, "안전함 (role 정보 없음, 그룹 분석 대기)"
     return False, "안전함 (role 정보 없음, 그룹 분석 대기)"
 
 
@@ -251,11 +276,13 @@ def detect_bac_group(results: list[dict]) -> list[dict]:
                         f"(유사도 {sim:.0%}, size={data['size']} vs admin={admin_data['size']})"
                     )
                     detected.append({"result": low_resp, "evidence": evidence})
+                    detected.append({"result": low_resp, "evidence": evidence})
                 elif sim >= SUSPICIOUS_RATIO:
                     evidence = (
                         f"BAC suspected: '{low_role_name}'이 admin과 부분 유사 "
                         f"(유사도 {sim:.0%}, 수동 확인 필요)"
                     )
+                    detected.append({"result": low_resp, "evidence": evidence})
                     detected.append({"result": low_resp, "evidence": evidence})
             else:
                 evidence = (
@@ -263,10 +290,14 @@ def detect_bac_group(results: list[dict]) -> list[dict]:
                     f"(status=200, size={data['size']}, 로그인 페이지 아님)"
                 )
                 detected.append({"result": low_resp, "evidence": evidence})
+                detected.append({"result": low_resp, "evidence": evidence})
 
     return detected
 
 
+def detect_idor_group(_results: list[dict]) -> list[dict]:
+    """IDOR 판정 - 추후 구현 예정."""
+    return []
 def detect_idor_group(_results: list[dict]) -> list[dict]:
     """IDOR 판정 - 추후 구현 예정."""
     return []
