@@ -118,7 +118,9 @@ def _infer_types(field_type: str, action_url: str, param_name: str) -> list[str]
 def _get_baseline_records_by_type(vtype: str) -> list[dict]:
     records: list[dict] = []
     if "xss" in vtype:
-        for bp in xss_get_all():
+        from payload.baseline.xss import get_by_strength as xss_get_by_strength
+        # get_by_strength("INSANE"): BODY+ATTR_VALUE+FILTER_BYPASS+SCRIPT_CONTEXT+STORED 전체 ~80개
+        for bp in xss_get_by_strength("INSANE"):
             records.append({
                 "vtype": vtype,
                 "type": bp.get("type"),
@@ -160,6 +162,7 @@ def build_tasks(
             continue
 
         action = target.get("action", "")
+        source_url = target.get("source_url", "")
         method = (target.get("method") or "GET").upper()
         inject_location = _guess_location(method)
         all_params = target.get("params") or []
@@ -248,6 +251,7 @@ def build_tasks(
                     "id": f"t{tid:06d}_r",
                     "point": _label,
                     "url": action,
+                    "source_url": source_url,
                     "method": method,
                     "inject_location": inject_location,
                     "inject_param": name,
