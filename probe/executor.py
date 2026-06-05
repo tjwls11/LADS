@@ -69,44 +69,22 @@ def _make_session() -> requests.Session:
     s.mount("https://", HTTPAdapter(max_retries=retry))
     return s
 
-# 프로브 작업을 실행하고 필요한 SQLi 재현 요청까지 수행하여 반환
-def execute(
-    tasks: list[dict],
+
+def _worker_one(
+    t: dict,
+    session: requests.Session,
     timeout: int = 10,
     delay: float = 0.0,
-    output_file: str | None = None,
-    progress_callback=None,
-    enable_recheck: bool = True,
-) -> list[dict]:
-    session = _make_session()
-    results: list[dict] = []
-    total = len(tasks)
+) -> dict:
+    if delay:
+        time.sleep(delay)
 
-    for i, t in enumerate(tasks):
-        if delay:
-            time.sleep(delay)
-
-        point = t.get("point")
-        payload = t.get("payload")
-        inject_mode = t.get("inject_mode", "replace")
-        inject_location = t.get("inject_location", "query")
-        inject_param = t.get("inject_param")
-
-        base: dict[str, Any] = {
-            "id": t.get("id"),
-            "point": point,
-            "task_group_id": t.get("task_group_id"),
-            "payload": payload,
-            "inject_mode": inject_mode,
-            "inject_location": inject_location,
-            "inject_param": inject_param,
-            "base_value": t.get("base_value"),
-            "repeat_index": t.get("repeat_index", 1),
-            "repeat_total": t.get("repeat_total", 1),
-            "reproduction_key": t.get("reproduction_key"),
-            "meta": t.get("meta") or {},
-            "error": None,
-        }
+    point = t.get("point")
+    payload = t.get("payload")
+    inject_mode = t.get("inject_mode", "replace")
+    inject_location = t.get("inject_location", "query")
+    inject_param = t.get("inject_param")
+    method = str(t.get("method", "GET")).upper()
 
     base: dict[str, Any] = {
         "id": t.get("id"),
@@ -117,21 +95,27 @@ def execute(
         "inject_location": inject_location,
         "inject_param": inject_param,
         "base_value": t.get("base_value"),
+        "repeat_index": t.get("repeat_index", 1),
+        "repeat_total": t.get("repeat_total", 1),
+        "reproduction_key": t.get("reproduction_key"),
         "meta": t.get("meta") or {},
         "error": None,
     }
 
     url = t.get("url")
-    method = str(t.get("method", "GET")).upper()
-
     if not url:
         return {**base, "error": "invalid_task"}
 
     base_params = dict(t.get("base_params") or {})
     base_headers = dict(t.get("base_headers") or {})
     base_cookies = dict(t.get("base_cookies") or {})
+    meta = t.get("meta") or {}
+    is_bac_task = "bac" in str(meta.get("vuln_type", "")).lower()
 
-    # noop: payload 주입 없이 원본 요청만 전송 (baseline/safe 요청용)
+    if is_bac_task:
+        session.cookies.clear()
+        session.cookies.update(base_cookies)
+
     if inject_mode == "noop":
         started = time.perf_counter()
         try:
@@ -144,16 +128,13 @@ def execute(
                 allow_redirects=True,
             )
             elapsed = time.perf_counter() - started
-            try:
-                body_text = resp.text
-            except Exception:
-                body_text = None
+            body_text = resp.text if resp.text else None
             return {
                 **base,
                 "url": url,
                 "method": "GET",
                 "status": resp.status_code,
-                "length":         len(resp.content) if resp.content is not None else None,
+                "length": len(resp.content) if resp.content is not None else None,
                 "content_length": len(resp.content) if resp.content is not None else None,
                 "elapsed": round(elapsed, 3),
                 "response_body": body_text[:20000] if body_text else None,
@@ -170,21 +151,13 @@ def execute(
     if payload is None or not inject_param:
         return {**base, "error": "invalid_task"}
 
-    base_params = dict(t.get("base_params") or {})
-    base_headers = dict(t.get("base_headers") or {})
-    base_cookies = dict(t.get("base_cookies") or {})
-    base_value   = str(t.get("base_value") or "")
-
+    base_value = str(t.get("base_value") or "")
     if t.get("needs_csrf_refresh") and method == "POST":
         src = t.get("source_url", "")
         if src:
             base_params.update(_fetch_fresh_csrf(session, src, timeout))
 
-    if inject_mode == "append":
-        injected = f"{base_value}{payload}"
-    else:
-        injected = str(payload)
-
+    injected = f"{base_value}{payload}" if inject_mode == "append" else str(payload)
     params = None
     data = None
     headers = dict(base_headers)
@@ -193,16 +166,12 @@ def execute(
     loc = str(inject_location).lower()
     if loc == "header":
         headers[str(inject_param)] = injected
-        if method == "POST":
-            data = dict(base_params)
-        else:
-            params = dict(base_params)
+        data = dict(base_params) if method == "POST" else None
+        params = None if method == "POST" else dict(base_params)
     elif loc == "cookie":
         cookies[str(inject_param)] = injected
-        if method == "POST":
-            data = dict(base_params)
-        else:
-            params = dict(base_params)
+        data = dict(base_params) if method == "POST" else None
+        params = None if method == "POST" else dict(base_params)
     elif loc == "body":
         data = dict(base_params)
         data[str(inject_param)] = injected
@@ -245,18 +214,13 @@ def execute(
             )
 
         elapsed = time.perf_counter() - started
-        try:
-            body_text = resp.text
-        except Exception:
-            body_text = None
-
-        # Stored XSS 검증: POST 성공 후 source_url GET → 렌더링 페이지 확인
+        body_text = resp.text if resp.text else None
         verify_body = None
         source_url = t.get("source_url", "")
         is_xss_post = (
             method == "POST"
             and source_url
-            and "xss" in str(t.get("meta", {}).get("vuln_type", "")).lower()
+            and "xss" in str((t.get("meta") or {}).get("vuln_type", "")).lower()
             and resp.status_code is not None
             and resp.status_code < 500
         )
@@ -278,7 +242,7 @@ def execute(
             "url": url,
             "method": method,
             "status": resp.status_code,
-            "length":         len(resp.content) if resp.content is not None else None,
+            "length": len(resp.content) if resp.content is not None else None,
             "content_length": len(resp.content) if resp.content is not None else None,
             "elapsed": round(elapsed, 3),
             "response_body": body_text[:20000] if body_text else None,
@@ -286,30 +250,12 @@ def execute(
         }
     except requests.Timeout:
         elapsed = time.perf_counter() - started
-        return {
-            **base,
-            "url": url,
-            "method": method,
-            "status": None,
-            "length": 0,
-            "content_length": 0,
-            "elapsed": round(elapsed, 3),
-            "response_body": None,
-            "error": "timeout",
-        }
+        return {**base, "url": url, "method": method, "status": None, "length": 0,
+                "content_length": 0, "elapsed": round(elapsed, 3), "response_body": None, "error": "timeout"}
     except Exception as e:
         elapsed = time.perf_counter() - started
-        return {
-            **base,
-            "url": url,
-            "method": method,
-            "status": None,
-            "length": 0,
-            "content_length": 0,
-            "elapsed": round(elapsed, 3),
-            "response_body": None,
-            "error": f"exception:{type(e).__name__}",
-        }
+        return {**base, "url": url, "method": method, "status": None, "length": 0,
+                "content_length": 0, "elapsed": round(elapsed, 3), "response_body": None, "error": f"exception:{type(e).__name__}"}
 
 
 def execute(
@@ -328,10 +274,28 @@ def execute(
     results: list[dict | None] = [None] * total
     _lock = threading.Lock()
     _done = [0]
+    role_sessions: dict[str, requests.Session] = {}  # 롤마다 새로운 세션 만들기
+    role_locks: dict[str, threading.Lock] = {}
+    role_map_lock = threading.Lock()
+
+    def _session_for(t: dict) -> tuple[requests.Session, threading.Lock | None]:
+        role = str((t.get("meta") or {}).get("role") or "").lower()
+        if not role:
+            # TODO: Decide whether non-BAC tasks should reuse per-worker sessions for speed.
+            return _make_session(), None
+        with role_map_lock:
+            if role not in role_sessions:
+                role_sessions[role] = _make_session()
+                role_locks[role] = threading.Lock()
+            return role_sessions[role], role_locks[role]
 
     def _run(idx: int, t: dict) -> None:
-        session = _make_session()
-        result = execute(t, session, timeout, delay)
+        session, session_lock = _session_for(t)
+        if session_lock:
+            with session_lock:
+                result = _worker_one(t, session, timeout, delay)
+        else:
+            result = _worker_one(t, session, timeout, delay)
         results[idx] = result
         if progress_callback and total > 0:
             with _lock:
@@ -346,8 +310,6 @@ def execute(
             except Exception:
                 pass  # 개별 태스크 오류는 result dict의 error 필드에 기록됨
 
-    final_results = [r for r in results if r is not None]
-
     if enable_recheck:   # 실패한 요청 재시도
         recheck_tasks = build_recheck_tasks(tasks, results)
         if recheck_tasks:
@@ -361,6 +323,8 @@ def execute(
                     enable_recheck=False,
                 )
             )
+
+    final_results = [r for r in results if r is not None]
 
     if output_file:
         parent = os.path.dirname(output_file)
