@@ -6,7 +6,7 @@ from difflib import SequenceMatcher
 import requests
 
 # 임계치
-SIMILARITY_THRESHOLD = 0.7
+SIMILARITY_THRESHOLD = 0.9
 VOTES_NEEDED         = 2
 
 # 에러, 권한거부 패턴
@@ -18,7 +18,7 @@ _ERROR_PATTERNS = [
     re.compile(r'관리자만\s*(?:접근|이용)', re.IGNORECASE),
     re.compile(r'잘못된\s*접근', re.IGNORECASE),
     re.compile(
-        r'alert\s*\((?:[^)(]|\([^)]*\))*\)\s*;\s*(?:window\.close|history\.back|document\.location|location\.href|location\.replace)',
+        r'alert\s*\((?:[^)(]|\([^)]*\))*\)\s*;\s*(?:window\.close|history\.back|document\.location|location\.href|location\.replace|opener\.location)',
         re.IGNORECASE | re.DOTALL,
     ),
 ]
