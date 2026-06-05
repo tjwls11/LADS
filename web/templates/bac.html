@@ -133,7 +133,8 @@
           <tr class="border-b border-surface-line text-left font-black text-slate-500">
             <th class="pb-3 pr-4">항목</th>
             <th class="pb-3 pr-4">위험도</th>
-            <th class="pb-3">설명</th>
+            <th class="pb-3 pr-4">설명</th>
+            <th class="pb-3">CVE</th>
           </tr>
         </thead>
         <tbody>
@@ -147,7 +148,29 @@
                 {{ f.type or '-' }}
               </span>
             </td>
-            <td class="max-w-[500px] truncate py-3 text-slate-600" title="{{ f.evidence }}">{{ f.evidence or '-' }}</td>
+            <td class="max-w-[360px] truncate py-3 pr-4 text-slate-600" title="{{ f.evidence }}">{{ f.evidence or '-' }}</td>
+            <td class="py-3 text-[12px]">
+              {% if f.extra and f.extra.cve_links %}
+                <div class="flex flex-col gap-1">
+                {% for cve in f.extra.cve_links %}
+                  <a href="{{ cve.url }}" target="_blank" rel="noopener"
+                     class="inline-flex items-center gap-1 font-mono text-[11px] text-blue-600 hover:underline">
+                    {{ cve.id }}
+                    {% if cve.score %}
+                    <span class="rounded px-1 text-[10px] font-black
+                      {% if cve.severity == 'CRITICAL' %}bg-red-100 text-red-700
+                      {% elif cve.severity == 'HIGH' %}bg-orange-100 text-orange-700
+                      {% else %}bg-slate-100 text-slate-600{% endif %}">
+                      {{ cve.score }}
+                    </span>
+                    {% endif %}
+                  </a>
+                {% endfor %}
+                </div>
+              {% else %}
+                <span class="text-slate-400">-</span>
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>

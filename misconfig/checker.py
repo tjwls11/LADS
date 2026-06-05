@@ -271,9 +271,57 @@ def _parse_product_version(header_value: str) -> tuple[str, str, str] | None:
     return None
 
 
+def _ver(s: str) -> tuple[int, ...]:
+    """버전 문자열을 정수 튜플로 변환 (비교용)."""
+    try:
+        return tuple(int(x) for x in re.split(r"[.\-]", s)[:3])
+    except Exception:
+        return (0, 0, 0)
+
+
+def _cve_affects_version(version: str, configurations: list) -> bool:
+    """NVD configurations 에서 version 범위 체크. 하나라도 해당하면 True."""
+    v = _ver(version)
+    for node_group in configurations:
+        for node in node_group.get("nodes", []):
+            for match in node.get("cpeMatch", []):
+                if not match.get("vulnerable"):
+                    continue
+                vsi = match.get("versionStartIncluding")
+                vse = match.get("versionStartExcluding")
+                vei = match.get("versionEndIncluding")
+                vee = match.get("versionEndExcluding")
+
+                # 버전 범위 없음 → criteria 의 특정 버전 or 와일드카드
+                if not any([vsi, vse, vei, vee]):
+                    criteria = match.get("criteria", "")
+                    parts = criteria.split(":")
+                    cpe_ver = parts[5] if len(parts) > 5 else "*"
+                    if cpe_ver == "*" or _ver(cpe_ver) == v:
+                        return True
+                    continue
+
+                # start 체크
+                if vsi and v < _ver(vsi):
+                    continue
+                if vse and v < _ver(vse):
+                    pass  # versionStartExcluding: v >= vse 이면 통과
+                elif vse and v <= _ver(vse):
+                    continue
+
+                # end 체크
+                if vei and v > _ver(vei):
+                    continue
+                if vee and v >= _ver(vee):
+                    continue
+
+                return True
+    return False
+
+
 def _query_nvd_cves(vendor: str, product: str, version: str) -> list[dict]:
     """
-    NVD API v2 — CPE 기반 CVE 조회.
+    NVD API v2 — CPE 기반 CVE 조회 + 버전 범위 필터링.
     환경변수 NVD_API_KEY 있으면 rate limit 완화 (50req/30s).
     """
     cpe_name = f"cpe:2.3:a:{vendor}:{product}:{version}:*:*:*:*:*:*:*"
@@ -317,12 +365,20 @@ def _query_nvd_cves(vendor: str, product: str, version: str) -> list[dict]:
 
         descriptions = cve.get("descriptions", [])
         desc = next((d["value"] for d in descriptions if d.get("lang") == "en"), "")
+        configurations = cve.get("configurations", [])
+
+        # 버전 범위 필터링: 이 버전에 실제로 해당하는 CVE만 포함
+        if configurations and not _cve_affects_version(version, configurations):
+            print(f"[MISCONFIG] CVE {cve_id} 버전 범위 불일치 — 제외 ({version})")
+            continue
 
         results.append({
-            "id":          cve_id,
-            "severity":    severity.upper(),
-            "score":       score,
-            "description": desc[:200] if desc else "",
+            "id":             cve_id,
+            "severity":       severity.upper(),
+            "score":          score,
+            "description":    desc[:200] if desc else "",
+            "url":            f"https://nvd.nist.gov/vuln/detail/{cve_id}",
+            "configurations": configurations,
         })
 
     return results
@@ -503,6 +559,10 @@ def _check_security_headers(base_url: str) -> list[dict]:
                     f"(top: {top['id']} {top_sev} score={top.get('score')})"
                 )
                 print(f"[MISCONFIG] {ftype} version+CVE: {header_name}: {value} → {cve_ids}")
+                cve_links = [
+                    {"id": c["id"], "score": c.get("score"), "severity": c.get("severity"), "url": c.get("url", "")}
+                    for c in cves[:5]
+                ]
                 findings.append(misconfig_finding(
                     type=ftype,
                     category="version_disclosure",
@@ -510,7 +570,7 @@ def _check_security_headers(base_url: str) -> list[dict]:
                     status=resp.status_code,
                     confidence=conf,
                     evidence=evidence,
-                    extra={"header": header_name, "value": value, "cves": cves},
+                    extra={"header": header_name, "value": value, "cves": cves, "cve_links": cve_links},
                 ))
             else:
                 print(f"[MISCONFIG] WARNING version_disclosure (CVE 없음): {header_name}: {value}")
