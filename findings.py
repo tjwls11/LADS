@@ -108,7 +108,8 @@ def sqli_finding_from_verdict(verdict: dict) -> dict | None:
     evidence  = verdict.get("evidence") or {}
     target    = evidence.get("target") or {}
     requests  = evidence.get("requests") or []
-    attack_req = next((r for r in requests if r.get("role") == "attack"), {})
+    _ATTACK_ROLES = {"attack", "true_attack", "delay_attack", "invalid_order", "union_attack"}
+    attack_req = next((r for r in requests if r.get("role") in _ATTACK_ROLES), {})
 
     return make_finding(
         module=MODULE_SQLI,

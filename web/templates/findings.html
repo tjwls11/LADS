@@ -118,205 +118,59 @@ block content %}
     class="flex min-h-0 flex-1 flex-col overflow-hidden rounded border border-surface-line bg-white"
   >
     <div class="border-b border-surface-line bg-surface-soft px-6 py-4">
-      <h2 class="text-[18px] font-black text-slate-950">
-        {% if all_results %}전체 진단 결과{% else %}위험 탐지 목록{% endif %}
-      </h2>
+      <h2 class="text-[18px] font-black text-slate-950">전체 진단 결과</h2>
     </div>
     <div class="min-h-0 flex-1 overflow-auto px-6 py-5">
       <table
-        class="w-full min-w-[1200px] border-separate border-spacing-0 text-left text-[14px]"
+        class="w-full border-separate border-spacing-0 text-left text-[14px]"
         id="results-table"
       >
         <thead>
-          <tr class="text-[13px] font-bold text-slate-500" id="findings-thead">
-            <th class="sortable border-b border-surface-line px-3 pb-3 min-w-[96px] whitespace-nowrap select-none">탐지 상태 <span class="sort-icon text-slate-300">↕</span></th>
-            <th class="sortable border-b border-surface-line px-3 pb-3 select-none">취약점 유형 <span class="sort-icon text-slate-300">↕</span></th>
-            <th class="sortable border-b border-surface-line px-3 pb-3 select-none">대상 <span class="sort-icon text-slate-300">↕</span></th>
-            <th class="border-b border-surface-line px-3 pb-3">파라미터</th>
-            <th class="border-b border-surface-line px-3 pb-3">페이로드</th>
-            <th class="sortable border-b border-surface-line px-3 pb-3 select-none">상태 <span class="sort-icon text-slate-300">↕</span></th>
-            <th class="border-b border-surface-line px-3 pb-3">근거</th>
+          <tr class="text-[13px] font-bold text-slate-500">
+            <th class="border-b border-surface-line px-4 pb-3 text-left">대상 URL</th>
+            <th class="border-b border-surface-line px-3 pb-3 text-center whitespace-nowrap">위험</th>
+            <th class="border-b border-surface-line px-3 pb-3 text-center whitespace-nowrap">경고</th>
+            <th class="border-b border-surface-line px-3 pb-3 text-center whitespace-nowrap">오류</th>
+            <th class="border-b border-surface-line px-3 pb-3 text-center whitespace-nowrap">안전</th>
+            <th class="border-b border-surface-line px-3 pb-3 text-center whitespace-nowrap">전체</th>
+            <th class="border-b border-surface-line px-3 pb-3"></th>
           </tr>
         </thead>
-        <tbody>
-          {% if all_results %} {% for r in all_results %}
-          {% set cves = r._extra.cves if r._extra and r._extra.cves else [] %}
-          {% set row_id = 'row-' + loop.index|string %}
-          <tr
-            class="hover:bg-slate-50 result-row {% if r._vulnerable %}row-danger{% elif r._warning %}row-warning{% elif r.error %}row-error{% else %}row-safe{% endif %} {% if cves %}cursor-pointer{% endif %}"
-            {% if cves %}onclick="toggleCve('{{ row_id }}')"{% endif %}
-          >
-            <td class="border-b border-slate-100 px-3 py-3 whitespace-nowrap">
-              {% if r._vulnerable %}
-              <span
-                class="inline-flex items-center gap-2 font-extrabold text-error whitespace-nowrap"
-              >
-                <span class="h-2 w-2 rounded-full bg-error"></span>위험
-              </span>
-              {% elif r._warning %}
-              <span
-                class="inline-flex items-center gap-2 font-extrabold text-amber-600 whitespace-nowrap"
-              >
-                <span class="h-2 w-2 rounded-full bg-amber-400"></span>경고
-              </span>
-              {% elif r.error %}
-              <span
-                class="inline-flex items-center gap-2 font-extrabold text-slate-400 whitespace-nowrap"
-              >
-                <span class="h-2 w-2 rounded-full bg-slate-300"></span>오류
-              </span>
-              {% else %}
-              <span
-                class="inline-flex items-center gap-2 font-extrabold text-emerald-600 whitespace-nowrap"
-              >
-                <span class="h-2 w-2 rounded-full bg-emerald-500"></span>안전
-              </span>
-              {% endif %}
+        <tbody id="url-group-tbody">
+          {% for g in url_groups %}
+          <tr class="url-group-row hover:bg-slate-50 cursor-pointer" data-idx="{{ loop.index0 }}" onclick="toggleGroup({{ loop.index0 }})">
+            <td class="border-b border-slate-100 px-4 py-3 font-mono text-[12px] text-slate-700 max-w-[500px] truncate">{{ g.url }}</td>
+            <td class="border-b border-slate-100 px-3 py-3 text-center">
+              {% if g.danger > 0 %}<span class="font-bold text-error">{{ g.danger }}</span>{% else %}<span class="text-slate-300">0</span>{% endif %}
             </td>
-            <td class="border-b border-slate-100 px-3 py-3">
-              {% if r._vuln_type %}
-              <span
-                class="rounded px-2 py-1 font-mono text-[12px] {% if 'xss' in r._vuln_type|lower %}bg-amber-100 text-amber-800 {% elif 'sql' in r._vuln_type|lower %}bg-red-100 text-red-800 {% elif 'bac' in r._vuln_type|lower %}bg-purple-100 text-purple-800 {% elif 'misconfig' in r._vuln_type|lower %}bg-blue-100 text-blue-800 {% else %}bg-slate-100 text-slate-700{% endif %}"
-              >
-                {{ r._vuln_type }}
-              </span>
-              {% else %}-{% endif %}
+            <td class="border-b border-slate-100 px-3 py-3 text-center">
+              {% if g.warning > 0 %}<span class="font-bold text-amber-600">{{ g.warning }}</span>{% else %}<span class="text-slate-300">0</span>{% endif %}
             </td>
-            <td
-              class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-600 break-all"
-            >
-              {{ r.url or r.point }}
+            <td class="border-b border-slate-100 px-3 py-3 text-center">
+              {% if g.error > 0 %}<span class="font-bold text-slate-400">{{ g.error }}</span>{% else %}<span class="text-slate-300">0</span>{% endif %}
             </td>
-            <td
-              class="border-b border-slate-100 px-3 py-3 font-mono text-[12px]"
-            >
-              {{ r.inject_param or '-' }}
+            <td class="border-b border-slate-100 px-3 py-3 text-center">
+              {% if g.safe > 0 %}<span class="text-emerald-600">{{ g.safe }}</span>{% else %}<span class="text-slate-300">0</span>{% endif %}
             </td>
-            <td
-              class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-700 break-all"
-            >
-              {{ r.payload }}
-            </td>
-            <td
-              class="border-b border-slate-100 px-3 py-3 font-mono text-[12px]"
-            >
-              {{ r.status or '-' }}
-            </td>
-            <td
-              class="border-b border-slate-100 px-3 py-3 text-slate-600"
-            >
-              <div class="break-all">{{ r._evidence or '' }}</div>
-              {% if cves %}
-              <span class="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-blue-500">
-                <span class="material-symbols-outlined text-[13px]">expand_more</span>
-                CVE {{ cves|length }}건
-              </span>
-              {% endif %}
+            <td class="border-b border-slate-100 px-3 py-3 text-center text-slate-500 font-bold">{{ g.total }}</td>
+            <td class="border-b border-slate-100 px-3 py-3 text-center">
+              <span class="expand-icon text-slate-400 text-[18px] material-symbols-outlined">expand_more</span>
             </td>
           </tr>
-          {% if cves %}
-          <tr id="{{ row_id }}" class="cve-detail hidden result-row {% if r._vulnerable %}row-danger{% elif r._warning %}row-warning{% else %}row-safe{% endif %}">
-            <td colspan="7" class="border-b border-slate-100 bg-slate-50 px-6 py-4">
-              <div class="text-[12px] font-bold text-slate-500 mb-2">
-                CVE 목록 — {{ r._extra.header }}: {{ r._extra.value }}
-              </div>
-              <table class="w-full border-separate border-spacing-0 text-[12px]">
-                <thead>
-                  <tr class="text-[11px] font-bold text-slate-400">
-                    <th class="pb-1 pr-4 text-left whitespace-nowrap">CVE ID</th>
-                    <th class="pb-1 pr-4 text-left whitespace-nowrap">Severity</th>
-                    <th class="pb-1 pr-4 text-left whitespace-nowrap">Score</th>
-                    <th class="pb-1 text-left">설명</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for cve in cves %}
-                  <tr>
-                    <td class="py-1 pr-4 font-mono font-bold whitespace-nowrap">
-                      <a href="https://nvd.nist.gov/vuln/detail/{{ cve.id }}" target="_blank"
-                         class="text-blue-600 hover:underline">{{ cve.id }}</a>
-                    </td>
-                    <td class="py-1 pr-4 whitespace-nowrap">
-                      <span class="rounded px-2 py-0.5 font-bold
-                        {% if cve.severity == 'CRITICAL' %}bg-red-100 text-red-700
-                        {% elif cve.severity == 'HIGH' %}bg-orange-100 text-orange-700
-                        {% elif cve.severity == 'MEDIUM' %}bg-yellow-100 text-yellow-700
-                        {% else %}bg-slate-100 text-slate-600{% endif %}">
-                        {{ cve.severity }}
-                      </span>
-                    </td>
-                    <td class="py-1 pr-4 font-mono whitespace-nowrap">{{ cve.score or '-' }}</td>
-                    <td class="py-1 text-slate-600 max-w-[500px]">{{ cve.description or '-' }}</td>
-                  </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
+          <tr class="url-group-detail hidden" id="group-detail-{{ loop.index0 }}">
+            <td colspan="7" class="border-b border-slate-200 bg-slate-50 p-0">
+              <div class="detail-placeholder px-6 py-3 text-[12px] text-slate-400">로딩 중...</div>
             </td>
           </tr>
-          {% endif %}
-          {% endfor %} {% else %} {% for f in findings %}
-          {% set verdict = (f.extra or {}).get('verdict', 'confirmed') if f.extra is mapping else 'confirmed' %}
-          <tr class="hover:bg-slate-50">
-            <td class="border-b border-slate-100 px-3 py-3 whitespace-nowrap">
-              {% if verdict == 'confirmed' %}
-              <span class="inline-flex items-center gap-2 font-extrabold text-error whitespace-nowrap">
-                <span class="h-2 w-2 rounded-full bg-error"></span>위험
-              </span>
-              {% elif verdict == 'suspected' %}
-              <span class="inline-flex items-center gap-2 font-extrabold text-amber-600 whitespace-nowrap">
-                <span class="h-2 w-2 rounded-full bg-amber-400"></span>의심
-              </span>
-              {% elif verdict == 'candidate' %}
-              <span class="inline-flex items-center gap-2 font-extrabold text-slate-500 whitespace-nowrap">
-                <span class="h-2 w-2 rounded-full bg-slate-400"></span>후보
-              </span>
-              {% else %}
-              <span class="inline-flex items-center gap-2 font-extrabold text-error whitespace-nowrap">
-                <span class="h-2 w-2 rounded-full bg-error"></span>위험
-              </span>
-              {% endif %}
-            </td>
-            <td class="border-b border-slate-100 px-3 py-3">
-              {% set display_type = f.type or f.module or '' %}
-              <span
-                class="rounded px-2 py-1 font-mono text-[12px] {% if 'xss' in display_type|lower %}bg-amber-100 text-amber-800 {% elif 'sql' in display_type|lower %}bg-red-100 text-red-800 {% elif display_type|lower == 'bac' %}bg-purple-100 text-purple-800 {% elif 'misconfig' in display_type|lower %}bg-blue-100 text-blue-800 {% else %}bg-slate-100 text-slate-700{% endif %}"
-              >
-                {{ display_type or '-' }}
-              </span>
-            </td>
-            <td
-              class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-600 break-all"
-            >
-              {{ f.url or f.point }}
-            </td>
-            <td
-              class="border-b border-slate-100 px-3 py-3 font-mono text-[12px]"
-            >
-              {{ f.param or '-' }}
-            </td>
-            <td
-              class="border-b border-slate-100 px-3 py-3 font-mono text-[12px] text-slate-700 break-all"
-            >
-              {{ f.payload }}
-            </td>
-            <td
-              class="border-b border-slate-100 px-3 py-3 font-mono text-[12px]"
-            >
-              {{ f.status or '-' }}
-            </td>
-            <td
-              class="border-b border-slate-100 px-3 py-3 text-slate-600 break-all"
-            >
-              {{ f.evidence }}
-            </td>
-          </tr>
-          {% endfor %} {% endif %}
+          {% endfor %}
         </tbody>
       </table>
     </div>
   </div>
 
   {% endif %}
+
+  <script id="url-groups-data" type="application/json">{{ url_groups | tojson }}</script>
 </section>
 {% endblock %} {% block scripts %}
 <style>
@@ -347,6 +201,220 @@ block content %}
   }
 </style>
 <script>
+  // ── URL 그룹 토글 ──
+  var _urlGroups = (function() {
+    try { return JSON.parse(document.getElementById('url-groups-data').textContent); } catch(e) { return []; }
+  })();
+
+  var _rendered = {};
+
+  function _statusLabel(s) {
+    if (s === 'danger')  return '<span style="display:inline-flex;align-items:center;gap:6px;font-weight:800;color:#dc2626;white-space:nowrap;"><span style="width:8px;height:8px;border-radius:50%;background:#dc2626;flex-shrink:0;"></span>위험</span>';
+    if (s === 'warning') return '<span style="display:inline-flex;align-items:center;gap:6px;font-weight:800;color:#d97706;white-space:nowrap;"><span style="width:8px;height:8px;border-radius:50%;background:#fbbf24;flex-shrink:0;"></span>경고</span>';
+    if (s === 'error')   return '<span style="display:inline-flex;align-items:center;gap:6px;font-weight:800;color:#94a3b8;white-space:nowrap;"><span style="width:8px;height:8px;border-radius:50%;background:#cbd5e1;flex-shrink:0;"></span>오류</span>';
+    return '<span style="display:inline-flex;align-items:center;gap:6px;font-weight:800;color:#059669;white-space:nowrap;"><span style="width:8px;height:8px;border-radius:50%;background:#10b981;flex-shrink:0;"></span>안전</span>';
+  }
+
+  function _typeColor(t) {
+    var k = (t||'').toLowerCase();
+    if (k.indexOf('xss') !== -1)      return 'background:#fef3c7;color:#92400e;';
+    if (k.indexOf('sql') !== -1)      return 'background:#fee2e2;color:#991b1b;';
+    if (k.indexOf('bac') !== -1)      return 'background:#f3e8ff;color:#6b21a8;';
+    if (k.indexOf('misconfig') !== -1) return 'background:#dbeafe;color:#1e40af;';
+    return 'background:#f1f5f9;color:#475569;';
+  }
+
+  var _detailFilters = {};
+
+  var _detailDd = (function() {
+    var el = document.createElement('div');
+    el.id = 'detail-filter-dd';
+    el.style.cssText = 'display:none;position:fixed;z-index:9999;background:#fff;border:1px solid #e2e8f0;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.12);min-width:120px;padding:4px 0;';
+    document.body.appendChild(el);
+    return el;
+  })();
+
+  var _curDdCtx = null;
+
+  function _makeDetailFilterBtn(idx, col, label) {
+    return label + '<button onclick="openDetailFilter(event,' + idx + ',\'' + col + '\')" id="dfbtn-' + idx + '-' + col + '" style="margin-left:4px;font-size:10px;color:#cbd5e1;cursor:pointer;background:none;border:none;padding:0;vertical-align:middle;">▼</button>';
+  }
+
+  function openDetailFilter(e, idx, col) {
+    e.stopPropagation();
+    var g = _urlGroups[idx];
+    if (!g) return;
+
+    if (_curDdCtx && _curDdCtx.idx === idx && _curDdCtx.col === col) {
+      _detailDd.style.display = 'none';
+      _curDdCtx = null;
+      return;
+    }
+    _curDdCtx = { idx: idx, col: col };
+
+    var unique = ['전체'];
+    if (col === 'status') { unique = unique.concat(['danger','warning','error','safe']); }
+    else {
+      var seen = {};
+      g.items.forEach(function(item) { var v = item[col] || '-'; if (!seen[v]) { seen[v] = 1; unique.push(v); } });
+    }
+
+    var labels = { danger:'위험', warning:'경고', error:'오류', safe:'안전' };
+    var cur = (_detailFilters[idx] || {})[col] || null;
+
+    _detailDd.innerHTML = unique.map(function(v) {
+      var active = (v === '전체' && !cur) || v === cur;
+      var display = labels[v] || v;
+      return '<div onclick="applyDetailFilter(event,' + idx + ',\'' + col + '\',\'' + v + '\')" style="padding:7px 16px;cursor:pointer;font-size:13px;font-weight:' + (active?'700':'400') + ';color:' + (active?'#1e293b':'#475569') + ';background:' + (active?'#f1f5f9':'transparent') + ';">' + (active?'✓ ':'') + display + '</div>';
+    }).join('');
+
+    var rect = e.target.getBoundingClientRect();
+    _detailDd.style.top  = (rect.bottom + 4) + 'px';
+    _detailDd.style.left = rect.left + 'px';
+    _detailDd.style.display = 'block';
+  }
+
+  function applyDetailFilter(e, idx, col, val) {
+    e.stopPropagation();
+    if (!_detailFilters[idx]) _detailFilters[idx] = {};
+    _detailFilters[idx][col] = (val === '전체') ? null : val;
+
+    var dd = document.getElementById('df-' + idx + '-' + col);
+    if (dd) dd.style.display = 'none';
+
+    var btn = document.getElementById('dfbtn-' + idx + '-' + col);
+    if (btn) btn.style.color = _detailFilters[idx][col] ? '#3b82f6' : '#cbd5e1';
+
+    var tbody = document.getElementById('dtbody-' + idx);
+    if (!tbody) return;
+    var g = _urlGroups[idx];
+    Array.from(tbody.querySelectorAll('tr')).forEach(function(tr, i) {
+      var item = g.items[i];
+      if (!item) return;
+      var f = _detailFilters[idx] || {};
+      var show = true;
+      if (f.status)    show = show && item.status_label === f.status;
+      if (f.vuln_type) show = show && item.vuln_type === f.vuln_type;
+      if (f.param)     show = show && item.param === f.param;
+      tr.style.display = show ? '' : 'none';
+    });
+  }
+
+  function _renderGroup(idx) {
+    var g = _urlGroups[idx];
+    if (!g) return '';
+    var rows = g.items.map(function(item) {
+      return '<tr style="border-bottom:1px solid #f1f5f9;">' +
+        '<td style="padding:8px 12px;white-space:nowrap;">' + _statusLabel(item.status_label) + '</td>' +
+        '<td style="padding:8px 12px;">' + (item.vuln_type ? '<span style="border-radius:4px;padding:2px 8px;font-family:monospace;font-size:11px;' + _typeColor(item.vuln_type) + '">' + item.vuln_type + '</span>' : '-') + '</td>' +
+        '<td style="padding:8px 12px;font-family:monospace;font-size:11px;color:#475569;">' + (item.param || '-') + '</td>' +
+        '<td style="padding:8px 12px;font-family:monospace;font-size:11px;color:#334155;word-break:break-all;max-width:240px;">' + (item.payload ? item.payload.replace(/</g,'&lt;') : '-') + '</td>' +
+        '<td style="padding:8px 12px;font-family:monospace;font-size:11px;color:#64748b;">' + (item.status || '-') + '</td>' +
+        '<td style="padding:8px 12px;font-size:11px;color:#475569;word-break:break-all;max-width:300px;">' + (item.evidence ? item.evidence.replace(/</g,'&lt;') : '') + '</td>' +
+      '</tr>';
+    }).join('');
+
+    var thStyle = 'position:relative;padding:6px 12px;text-align:left;white-space:nowrap;';
+    return '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
+      '<thead><tr style="font-size:11px;font-weight:700;color:#94a3b8;border-bottom:1px solid #e2e8f0;">' +
+        '<th style="' + thStyle + '">' + _makeDetailFilterBtn(idx,'status','상태') + '</th>' +
+        '<th style="' + thStyle + '">' + _makeDetailFilterBtn(idx,'vuln_type','유형') + '</th>' +
+        '<th style="' + thStyle + '">' + _makeDetailFilterBtn(idx,'param','파라미터') + '</th>' +
+        '<th style="padding:6px 12px;text-align:left;">페이로드</th>' +
+        '<th style="padding:6px 12px;text-align:left;">HTTP</th>' +
+        '<th style="padding:6px 12px;text-align:left;">근거</th>' +
+      '</tr></thead>' +
+      '<tbody id="dtbody-' + idx + '">' + rows + '</tbody></table>';
+  }
+
+  function toggleGroup(idx) {
+    var detail = document.getElementById('group-detail-' + idx);
+    var row = document.querySelector('.url-group-row[data-idx="' + idx + '"]');
+    if (!detail) return;
+    var isOpen = !detail.classList.contains('hidden');
+    if (isOpen) {
+      detail.classList.add('hidden');
+      if (row) { var icon = row.querySelector('.expand-icon'); if (icon) icon.textContent = 'expand_more'; }
+    } else {
+      if (!_rendered[idx]) {
+        detail.querySelector('.detail-placeholder').outerHTML = _renderGroup(idx);
+        _rendered[idx] = true;
+      }
+      detail.classList.remove('hidden');
+      if (row) { var icon = row.querySelector('.expand-icon'); if (icon) icon.textContent = 'expand_less'; }
+    }
+  }
+
+  // ── 컬럼 필터 ──
+  var _colFilters = { url: null, danger: null, warning: null, error: null, safe: null };
+
+  function openFilter(e, col) {
+    e.stopPropagation();
+    document.querySelectorAll('.col-filter-dropdown').forEach(function(d) { d.classList.add('hidden'); });
+    var dd = document.getElementById('filter-' + col);
+    if (!dd) return;
+
+    dd.innerHTML = '';
+    dd.style.cssText = 'position:absolute;top:100%;left:0;z-index:100;background:#fff;border:1px solid #e2e8f0;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,0.10);min-width:130px;padding:4px 0;';
+
+    var options = col === 'url'
+      ? [['전체', null], ['위험 있음', 'has_danger'], ['안전만', 'safe_only']]
+      : [['전체', null], ['있음', 'has'], ['없음', 'none']];
+
+    options.forEach(function(opt) {
+      var label = opt[0], val = opt[1];
+      var item = document.createElement('div');
+      var active = _colFilters[col] === val;
+      item.style.cssText = 'padding:7px 16px;cursor:pointer;font-size:13px;font-weight:' + (active ? '700' : '400') + ';color:' + (active ? '#1e293b' : '#475569') + ';background:' + (active ? '#f1f5f9' : 'transparent') + ';';
+      item.textContent = (active ? '✓ ' : '') + label;
+      item.onmouseenter = function() { if (!active) item.style.background = '#f8fafc'; };
+      item.onmouseleave = function() { if (!active) item.style.background = 'transparent'; };
+      item.onclick = function(ev) {
+        ev.stopPropagation();
+        _colFilters[col] = val;
+        dd.classList.add('hidden');
+        applyColFilters();
+        var btn = document.querySelector('.col-filter-btn[data-col="' + col + '"]');
+        if (btn) btn.style.color = val ? '#3b82f6' : '';
+      };
+      dd.appendChild(item);
+    });
+
+    dd.classList.remove('hidden');
+  }
+
+  function applyColFilters() {
+    var rows = document.querySelectorAll('.url-group-row');
+    rows.forEach(function(row) {
+      var idx = parseInt(row.getAttribute('data-idx'));
+      var g = _urlGroups[idx];
+      if (!g) return;
+      var show = true;
+
+      if (_colFilters.url === 'has_danger') show = show && g.danger > 0;
+      if (_colFilters.url === 'safe_only')  show = show && g.danger === 0 && g.warning === 0;
+      if (_colFilters.danger === 'has')   show = show && g.danger > 0;
+      if (_colFilters.danger === 'none')  show = show && g.danger === 0;
+      if (_colFilters.warning === 'has')  show = show && g.warning > 0;
+      if (_colFilters.warning === 'none') show = show && g.warning === 0;
+      if (_colFilters.error === 'has')    show = show && g.error > 0;
+      if (_colFilters.error === 'none')   show = show && g.error === 0;
+      if (_colFilters.safe === 'has')     show = show && g.safe > 0;
+      if (_colFilters.safe === 'none')    show = show && g.safe === 0;
+
+      row.style.display = show ? '' : 'none';
+      var detail = document.getElementById('group-detail-' + idx);
+      if (detail && !show) detail.style.display = 'none';
+      if (detail && show && !detail.classList.contains('hidden')) detail.style.display = '';
+    });
+  }
+
+  document.addEventListener('click', function() {
+    document.querySelectorAll('.col-filter-dropdown').forEach(function(d) { d.classList.add('hidden'); });
+    _detailDd.style.display = 'none';
+    _curDdCtx = null;
+  });
+
   function filterTable(mode) {
     document.querySelectorAll('.result-row').forEach(function (row) {
       if (mode === 'all') {

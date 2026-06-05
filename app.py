@@ -593,6 +593,43 @@ def results_page():
     return redirect("/findings")
 
 
+def _group_results_by_url(all_results: list[dict]) -> list[dict]:
+    from collections import defaultdict
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for r in all_results:
+        url = r.get("url") or r.get("point") or "unknown"
+        groups[url].append(r)
+
+    result = []
+    for url, items in groups.items():
+        danger  = sum(1 for r in items if r.get("_vulnerable"))
+        warning = sum(1 for r in items if r.get("_warning") and not r.get("_vulnerable"))
+        error   = sum(1 for r in items if r.get("error") and not r.get("_vulnerable") and not r.get("_warning"))
+        safe    = len(items) - danger - warning - error
+        slim_items = [
+            {
+                "status_label": "danger" if r.get("_vulnerable") else "warning" if r.get("_warning") else "error" if r.get("error") else "safe",
+                "vuln_type":    r.get("_vuln_type") or "",
+                "param":        r.get("inject_param") or "",
+                "payload":      str(r.get("payload") or "")[:120],
+                "status":       r.get("status"),
+                "evidence":     str(r.get("_evidence") or "")[:200],
+            }
+            for r in items
+        ]
+        result.append({
+            "url":     url,
+            "danger":  danger,
+            "warning": warning,
+            "error":   error,
+            "safe":    safe,
+            "total":   len(items),
+            "items":   slim_items,
+        })
+
+    return sorted(result, key=lambda x: (-x["danger"], -x["warning"], -x["total"]))
+
+
 @app.route("/findings")
 def findings_page():
     run_id = request.args.get("run") or _current_run_id
@@ -665,7 +702,9 @@ def findings_page():
             "error":        None,
         })
 
-    safe_cnt = sum(1 for r in all_results if not r.get("_vulnerable") and not r.get("error"))
+    safe_cnt = sum(1 for r in all_results if not r.get("_vulnerable") and not r.get("_warning") and not r.get("error"))
+
+    url_groups = _group_results_by_url(all_results)
 
     return render_template(
         "findings.html",
@@ -676,6 +715,7 @@ def findings_page():
         misconfig_cnt=misconfig_cnt,
         safe_cnt=safe_cnt,
         all_results=all_results,
+        url_groups=url_groups,
         run_id=run_id,
         current_run=_current_run_id,
     )
