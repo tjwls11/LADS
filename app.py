@@ -377,7 +377,7 @@ def _task_misconfig():
 
 
 def _task_all(skip_crawl: bool = False, resume: bool = False):
-    _all_impl(_run_path, _active_url(), skip_crawl=skip_crawl, resume=resume, emit_progress=_emit_progress)
+    _all_impl(_run_path, _active_url(), _run_path("payloads.json"), _run_path("payloads_meta.json"), skip_crawl=skip_crawl, resume=resume, emit_progress=_emit_progress)
 
 def _task_bac():
     _bac_impl(_run_path, _active_url(), _emit_progress)
@@ -559,11 +559,10 @@ def _misconfig_done() -> bool:
 
 def _get_pipeline_steps():
     checks = [
-        ("crawl",     "크롤러",        "travel_explore", os.path.exists(_run_path("crawl_result.json")) and os.path.exists(_run_path("targets.json"))),
-        ("probe",     "주입 테스트 준비", "radar",          os.path.exists(_run_path("probe_tasks.json"))),
-        ("execute",   "실행기",         "terminal",       os.path.exists(_run_path("execution_results.json"))),
-        ("validate",  "분석기",         "analytics",      os.path.exists(_run_path("findings.json"))),
-        ("misconfig", "설정 오류 점검",  "policy",         _misconfig_done()),
+        ("crawl",    "크롤러",         "travel_explore", os.path.exists(_run_path("crawl_result.json")) and os.path.exists(_run_path("targets.json"))),
+        ("probe",    "주입 테스트 준비", "radar",          os.path.exists(_run_path("probe_tasks.json"))),
+        ("execute",  "실행기",         "terminal",       os.path.exists(_run_path("execution_results.json"))),
+        ("validate", "분석기",         "analytics",      os.path.exists(_run_path("findings.json"))),
     ]
     active_assigned = False
     steps = []
@@ -616,14 +615,19 @@ def index():
 @app.route("/bac")
 def bac_page():
     bac_findings_file = _run_path("bac_findings.json")
-    bac_findings = load_json(bac_findings_file, [])
+    all_findings = load_json(bac_findings_file, [])
+    bac_findings = [f for f in all_findings if f.get("module") != "misconfig"]
+    misconfig_findings = [f for f in all_findings if f.get("module") == "misconfig"]
     return render_template(
         "bac.html",
         bac_findings=bac_findings,
         bac_cnt=len(bac_findings),
+        misconfig_findings=misconfig_findings,
+        misconfig_cnt=len(misconfig_findings),
         has_crawl=os.path.exists(_run_path("crawl_result.json")),
         has_bac_results=os.path.exists(_run_path("bac_vertical_results.json")),
         has_bac_findings=os.path.exists(bac_findings_file),
+        has_misconfig=len(misconfig_findings) > 0,
         current_run=_current_run_id or "",
     )
 

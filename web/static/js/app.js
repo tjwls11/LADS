@@ -90,8 +90,8 @@ var _labels = {
   execute: '활성 스캔',
   validate: '결과 분석',
   misconfig: '설정 오류 점검',
-  bac: 'BAC 진단',
-  all: '전체 진단',
+  bac: '접근제어 점검',
+  all: '취약점 스캔',
 }
 
 var _taskOrder = [
