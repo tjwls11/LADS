@@ -209,13 +209,23 @@ _REQUEST_HEADERS = {
 
 _MIN_BODY_LEN = 100
 
+_LOGIN_PAGE_RE = re.compile(
+    r'input[^>]+type=["\']password["\']'
+    r'|name=["\'](?:password|passwd|pw|user_pw)["\']',
+    re.IGNORECASE,
+)
+
+
+def _is_login_page(body: str) -> bool:
+    return bool(_LOGIN_PAGE_RE.search(body))
+
 
 # ── HTTP 헬퍼 ─────────────────────────────────────────────────
 
-def _get(url: str, timeout: int = 10) -> Optional[requests.Response]:
+def _get(url: str, timeout: int = 10, follow: bool = False) -> Optional[requests.Response]:
     try:
         return requests.get(
-            url, timeout=timeout, allow_redirects=False,
+            url, timeout=timeout, allow_redirects=follow,
             headers=_REQUEST_HEADERS,
         )
     except requests.exceptions.Timeout:
@@ -351,6 +361,34 @@ def _check_file(base_url: str, path: str, category: str, rule_key: str) -> list[
             evidence=f"{path} returned HTTP 403 — file may exist but access is restricted",
         )]
 
+    # [High-1] 3xx 리다이렉트: 따라가서 최종 응답 분석
+    if resp.status_code in (301, 302, 303, 307, 308):
+        followed = _get(url, follow=True)
+        if followed is None or followed.status_code != 200:
+            return []
+        if _is_login_page(followed.text):
+            print(f"[MISCONFIG] WARNING {category} (302→login): {url}")
+            return [misconfig_finding(
+                type=MISCONFIG_WARNING,
+                category=category,
+                url=url,
+                status=resp.status_code,
+                confidence=LOW,
+                evidence=f"{path} redirects to login page — file may exist behind authentication",
+            )]
+        found, evidence = _match_keywords(followed.text, rule_key)
+        if found:
+            print(f"[MISCONFIG] CONFIRMED {category} (via redirect): {url}")
+            return [misconfig_finding(
+                type=MISCONFIG_CONFIRMED,
+                category=category,
+                url=url,
+                status=resp.status_code,
+                confidence=HIGH,
+                evidence=evidence,
+            )]
+        return []
+
     if resp.status_code != 200:
         return []
 
@@ -366,7 +404,10 @@ def _check_file(base_url: str, path: str, category: str, rule_key: str) -> list[
             evidence=evidence,
         )]
 
-    # 200이지만 키워드 없음 — 내용이 충분히 있을 때만 WARNING
+    # [High-2] 200이지만 키워드 없음 — 로그인 페이지면 오탐이므로 제외
+    if _is_login_page(resp.text):
+        return []
+
     body_stripped = resp.text.strip()
     if len(body_stripped) > _MIN_BODY_LEN:
         print(f"[MISCONFIG] WARNING {category} (200, no keyword match): {url}")

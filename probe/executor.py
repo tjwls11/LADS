@@ -69,8 +69,8 @@ def _make_session() -> requests.Session:
     s.mount("https://", HTTPAdapter(max_retries=retry))
     return s
 
-
-def _worker_one(
+# 프로브 작업을 실행하고 필요한 SQLi 재현 요청까지 수행하여 반환
+def _execute_sequential(
     t: dict,
     session: requests.Session,
     timeout: int = 10,
@@ -293,9 +293,9 @@ def execute(
         session, session_lock = _session_for(t)
         if session_lock:
             with session_lock:
-                result = _worker_one(t, session, timeout, delay)
+                result = _execute_sequential(t, session, timeout, delay)
         else:
-            result = _worker_one(t, session, timeout, delay)
+            result = _execute_sequential(t, session, timeout, delay)
         results[idx] = result
         if progress_callback and total > 0:
             with _lock:

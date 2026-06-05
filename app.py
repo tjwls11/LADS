@@ -4,7 +4,6 @@ import json
 import os
 import io
 import queue
-import secrets
 import subprocess
 import sys
 import shutil
@@ -46,9 +45,10 @@ del _pkg, _mod
 load_dotenv()
 
 
-TARGETS_CONFIG_FILE = "targets_config.json"
-ACTIVE_TARGET_FILE  = "active_target.json"
-RUNS_DIR = "runs"
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TARGETS_CONFIG_FILE = os.path.join(_BASE_DIR, "targets_config.json")
+ACTIVE_TARGET_FILE  = os.path.join(_BASE_DIR, "active_target.json")
+RUNS_DIR = os.path.join(_BASE_DIR, "runs")
 
 def _load_targets() -> list[dict]:
     if os.path.exists(TARGETS_CONFIG_FILE):
@@ -233,8 +233,13 @@ def _run_task_name(run_type: str) -> str:
 def _make_run_id(run_type: str) -> str:
     task_name = _run_task_name(run_type)
     date_part = datetime.now().strftime("%Y%m%d")
-    random_part = secrets.token_hex(3)
-    return f"run-{task_name}-{date_part}-{random_part}"
+    base_id = f"run-{task_name}-{date_part}"
+    run_id = base_id
+    suffix = 2
+    while os.path.exists(_run_dir(run_id)):
+        run_id = f"{base_id}-{suffix}"
+        suffix += 1
+    return run_id
 
 
 def _is_run_id(name: str) -> bool:
@@ -247,7 +252,7 @@ def _run_created_label(run_id: str) -> str:
     except Exception:
         pass
     parts = run_id.split("-")
-    if len(parts) >= 4 and parts[0] == "run":
+    if len(parts) >= 3 and parts[0] == "run":
         try:
             return datetime.strptime(parts[2], "%Y%m%d").strftime("%Y-%m-%d")
         except Exception:
@@ -299,6 +304,7 @@ def _list_run_ids() -> list[str]:
             d for d in os.listdir(RUNS_DIR)
             if os.path.isdir(os.path.join(RUNS_DIR, d)) and _is_run_id(d)
         ],
+        key=lambda x: os.path.getmtime(os.path.join(RUNS_DIR, x)),
         reverse=True,
     )
 
@@ -429,7 +435,6 @@ def stream_task(task):
         with _log_lock:
             _log_buffer.clear()
             _step_timing.clear()
-        _open_log_file(os.path.join(RUNS_DIR, _current_run_id))
 
         def run_in_thread():
             global _running_task
@@ -453,7 +458,6 @@ def stream_task(task):
                 _task_lock.release()
                 _broadcast(f"[{label}] 완료")
                 _broadcast("__DONE__")
-                _close_log_file()
 
         threading.Thread(target=run_in_thread, daemon=True).start()
 
@@ -483,9 +487,9 @@ def _list_runs() -> list[dict]:
     if not os.path.exists(RUNS_DIR):
         return []
     runs = []
-    for d in sorted(os.listdir(RUNS_DIR), reverse=True):
+    for d in sorted(os.listdir(RUNS_DIR), key=lambda x: os.path.getmtime(os.path.join(RUNS_DIR, x)), reverse=True):
         full = os.path.join(RUNS_DIR, d)
-        if not os.path.isdir(full) or not d.startswith("run_"):
+        if not os.path.isdir(full) or not _is_run_id(d):
             continue
         files = set(os.listdir(full))
         ts = _run_created_label(d)
