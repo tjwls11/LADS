@@ -2,43 +2,14 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from difflib import SequenceMatcher
+import requests
 
-# ── 임계치 ───────────────────────────────────────────────────────
-MIN_VULN_BODY_SIZE     = 500
-ADMIN_SIMILARITY_THRES = 0.85
-SUSPICIOUS_RATIO       = 0.5
+# 임계치
+SIMILARITY_THRESHOLD = 0.7
+VOTES_NEEDED         = 2
 
-# ── 로그인 페이지 식별 ─────────────────────────────────────────────
-_LOGIN_FORM_PATTERNS = [
-    re.compile(r'<input[^>]+type=["\']password["\']', re.IGNORECASE),
-    re.compile(r'<input[^>]+name=["\'](?:mb_password|password|passwd|pwd)["\']', re.IGNORECASE),
-    re.compile(r'name=["\']mb_id["\']', re.IGNORECASE),
-    re.compile(r'<form[^>]+action=["\'][^"\']*login', re.IGNORECASE),
-]
-
-_LOGIN_TEXT_HINTS = [
-    "로그인이 필요", "login required", "please log in",
-    "세션이 만료", "재로그인",
-]
-
-_LOGIN_JS_REDIRECT_RE = re.compile(
-    r"(?:document\.location|location\.replace|location\.href)\s*[=(]['\"]([^'\"]*login[^'\"]*)['\"]",
-    re.IGNORECASE,
-)
-
-
-def is_login_page(body: str) -> bool:
-    if not body:
-        return False
-    if any(p.search(body) for p in _LOGIN_FORM_PATTERNS):
-        return True
-    if _LOGIN_JS_REDIRECT_RE.search(body):
-        return True
-    body_lower = body.lower()
-    return sum(1 for h in _LOGIN_TEXT_HINTS if h.lower() in body_lower) >= 2
-
-
-# ── 에러/권한거부 페이지 식별 ─────────────────────────────────────
+# 에러, 권한거부 패턴
 _ERROR_PATTERNS = [
     re.compile(r'권한이?\s*없', re.IGNORECASE),
     re.compile(r'access\s+denied', re.IGNORECASE),
@@ -46,55 +17,110 @@ _ERROR_PATTERNS = [
     re.compile(r'unauthorized', re.IGNORECASE),
     re.compile(r'관리자만\s*(?:접근|이용)', re.IGNORECASE),
     re.compile(r'잘못된\s*접근', re.IGNORECASE),
-    # Gnuboard JS alert 차단 패턴 (alert + window.close / history.back)
-    # 내부 괄호 포함 매칭: alert("포인트(0)..."); history.back()
     re.compile(
-        r'alert\s*\((?:[^)(]|\([^)]*\))*\)\s*;\s*(?:window\.close|history\.back)',
+        r'alert\s*\((?:[^)(]|\([^)]*\))*\)\s*;\s*(?:window\.close|history\.back|document\.location|location\.href|location\.replace)',
         re.IGNORECASE | re.DOTALL,
     ),
 ]
 
+_STRIP_TAGS_RE = re.compile(r'<(script|style)[^>]*>.*?</\1>', re.DOTALL | re.IGNORECASE)
+_HREF_RE       = re.compile(r'href=["\']([^"\']+)["\']', re.IGNORECASE)
 
-def is_error_page(body: str, status: int) -> bool:
-    if status in (401, 403, 404, 500, 503):
-        return True
-    if not body:
-        return False
+_REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+}
+
+_page_cache: dict[str, str] = {} # 이미 가져온 URL의 body 반환
+
+
+# 로그인 url과 홈페이지 url의 html을 가져옴
+def _fetch_body(url: str) -> str:
+    if url in _page_cache:
+        return _page_cache[url]
+    try:
+        resp = requests.get(url, timeout=10, allow_redirects=True, headers=_REQUEST_HEADERS)
+        body = resp.text if resp.status_code == 200 else ""
+    except Exception:
+        body = ""
+    _page_cache[url] = body
+    return body
+
+
+
+# =====
+# 유사도 함수
+# =====
+# 앞 3천자 기준 문자열 유사도 검사
+def _seq_sim(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    return SequenceMatcher(None, a[:3000], b[:3000]).ratio()
+
+
+# script, style 태그 제거 후 남은 크기 비율 검사
+def _size_sim(a: str, b: str) -> float:
+    sa = len(_STRIP_TAGS_RE.sub("", a))
+    sb = len(_STRIP_TAGS_RE.sub("", b))
+    if not sa or not sb:
+        return 0.0
+    return min(sa, sb) / max(sa, sb)
+
+
+# href 링크 집합의 유사도
+def _href_sim(a: str, b: str) -> float:
+    ha = set(_HREF_RE.findall(a))
+    hb = set(_HREF_RE.findall(b))
+    union = ha | hb
+    if not union:
+        return 0.0
+    return len(ha & hb) / len(union)
+
+
+# 위에 정의된 유사도 함수중 2개 이상이 임계값 이상일 경우 취약판정
+def is_similar(a: str, b: str, threshold: float = SIMILARITY_THRESHOLD) -> bool:
+    votes = [
+        _seq_sim(a, b)  >= threshold,
+        _size_sim(a, b) >= threshold,
+        _href_sim(a, b) >= threshold,
+    ]
+    return sum(votes) >= VOTES_NEEDED
+
+
+# =====
+# 차단 판정
+# =====
+
+def _is_error_body(body: str) -> bool:
     return any(p.search(body) for p in _ERROR_PATTERNS)
 
 
-# ── 민감 경로 식별 ────────────────────────────────────────────────
-_SENSITIVE_PATH_PATTERNS = [
-    re.compile(r'/install/?', re.IGNORECASE),
-    re.compile(r'/setup/?', re.IGNORECASE),
-    re.compile(r'/test\.php', re.IGNORECASE),
-    re.compile(r'/debug\.php', re.IGNORECASE),
-    re.compile(r'/phpinfo\.php', re.IGNORECASE),
-    re.compile(r'/info\.php', re.IGNORECASE),
-    re.compile(r'/\.git/', re.IGNORECASE),
-    re.compile(r'/\.env', re.IGNORECASE),
-    re.compile(r'/backup', re.IGNORECASE),
-    re.compile(r'\.bak(\?|$)', re.IGNORECASE),
-    re.compile(r'\.old(\?|$)', re.IGNORECASE),
-    re.compile(r'\.sql(\?|$)', re.IGNORECASE),
-]
+# 테스트 응답이 차단된 응답인지 판정
+def _is_blocked(data: dict, login_url: str, home_url: str) -> bool:
+    if data["status"] != 200: # 반환 status가 200이 아닐경우
+        return True
+    body = data["body"]       # 권한 없음류 응답일 경우
+    if _is_error_body(body):
+        return True           
+    if login_url:             # 로그인 url 페이지와 body가 유사한지
+        login_body = _fetch_body(login_url)
+        if login_body and is_similar(body, login_body):
+            return True
+    if home_url:              # 홈페이지 url 페이지와 body가 유사한지
+        home_body = _fetch_body(home_url)
+        if home_body and is_similar(body, home_body):
+            return True
+    return False
 
 
-def is_sensitive_path(url: str) -> bool:
-    if not url:
-        return False
-    return any(p.search(url) for p in _SENSITIVE_PATH_PATTERNS)
+# =====
+# 응답 추출
+# =====
 
-
-# ── 응답 정규화 ───────────────────────────────────────────────────
 def _extract(r: dict) -> dict:
-    if "response" in r and isinstance(r["response"], dict):
-        resp = r["response"]
-        return {
-            "status": resp.get("status") or 0,
-            "body":   resp.get("body") or "",
-            "size":   resp.get("length") or len(resp.get("body") or ""),
-        }
     body = r.get("response_body") or ""
     return {
         "status": r.get("status") or 0,
@@ -108,165 +134,93 @@ def _get_role(r: dict) -> str:
     role = meta.get("role")
     if role:
         return role.lower()
-    req_info = r.get("request_info") or {}
-    return (req_info.get("role") or "unknown").lower()
+    return (r.get("request_info") or {}).get("role", "unknown").lower()
+
+
+def _get_scenario(r: dict) -> str:
+    return ((r.get("meta") or {}).get("scenario") or "").lower()
 
 
 def _vuln_type(r: dict) -> str:
     return ((r.get("meta") or {}).get("vuln_type") or "").lower()
 
 
-# ── 응답 유사도 ───────────────────────────────────────────────────
-def body_similarity(a: str, b: str) -> float:
-    if not a or not b:
-        return 0.0
-    if hash(a) == hash(b):
-        return 1.0
-    la, lb = len(a), len(b)
-    return min(la, lb) / max(la, lb)
-
-
-# 로그인/권한거부가 아닌 정상 접근 응답인지 반환
-def _is_success_content(data: dict) -> bool:
-    return (
-        data["status"] == 200
-        and data["size"] >= MIN_VULN_BODY_SIZE
-        and not is_login_page(data["body"])
-        and not is_error_page(data["body"], data["status"])
-    )
-
-
-# 결과 메타데이터에서 시나리오 이름을 반환
-def _get_scenario(r: dict) -> str:
-    return ((r.get("meta") or {}).get("scenario") or "").lower()
-
-
-# ── 단건 판정 ─────────────────────────────────────────────────────
-def validate_bac(test_result: dict) -> tuple[bool, str]:
-    if not test_result:
-        return False, "검증 불가 (입력 없음)"
-
-    url  = (test_result.get("url") or "").lower()
-    resp = _extract(test_result)
-    role = _get_role(test_result)
-
-    status = resp["status"]
-    body   = resp["body"]
-    size   = resp["size"]
-
-    # 1단계: Forced Browsing
-    if is_sensitive_path(url):
-        if status == 200 and size >= MIN_VULN_BODY_SIZE:
-            if not is_login_page(body) and not is_error_page(body, status):
-                return True, f"[VULNERABLE] forced_browsing — 민감 경로 '{url}' 노출 (size={size})"
-
-    # 2단계: 수직적 권한 상승
-    if role == "admin":
-        return False, "안전함 (admin baseline)"
-    if status != 200:
-        return False, f"안전함 (status={status}, 차단됨)"
-    if is_login_page(body):
-        return False, "안전함 (로그인 페이지로 리다이렉트됨)"
-    if is_error_page(body, status):
-        return False, "안전함 (권한 거부 페이지)"
-    if size < MIN_VULN_BODY_SIZE:
-        return False, f"안전함 (빈 응답 size={size})"
-
-    if role in ("guest", "member", "member1", "user"):
-        return True, f"[VULNERABLE] vertical_escalation — '{role}' 권한으로 '{url}' 접근 성공 (size={size})"
-
-    return False, "안전함 (role 정보 없음, 그룹 분석 대기)"
-
-
-# ── 그룹 단위 BAC 분석 ────────────────────────────────────────────
-def detect_bac_group(results: list[dict]) -> list[dict]:
+# BAC 분석
+def detect_bac_group(results: list[dict], login_url: str = "", home_url: str = "") -> list[dict]:
     bac_results = [
         r for r in results
         if not r.get("error")
         and r.get("response_body")
-        and ("bac" in _vuln_type(r) or "broken_access" in _vuln_type(r))
+        and ("bac" in _vuln_type(r) or "bac_vertical" in _vuln_type(r))
     ]
     if not bac_results:
         return []
 
-    groups: dict[tuple, list[dict]] = defaultdict(list)
+    groups: dict[str, list[dict]] = defaultdict(list)
     for r in bac_results:
-        meta = r.get("meta") or {}
-        key = (
-            meta.get("scenario_id") or r.get("point") or r.get("url"),
-            r.get("url"),
-            r.get("method") or "GET",
-        )
+        key = r.get("point") or (r.get("meta") or {}).get("scenario_id") or r.get("url")
         groups[key].append(r)
 
     detected: list[dict] = []
 
-    for (_point, url, _method), group in groups.items():
+    for _point, group in groups.items(): # 결과 리스트값만 받아옴
         by_role: dict[str, dict] = {}
         for r in group:
             by_role[_get_role(r)] = r
 
         scenario = _get_scenario(group[0])
-        admin      = by_role.get("admin")
-        member1     = by_role.get("member1") or by_role.get("member") or by_role.get("user")
-        guest      = by_role.get("guest") or by_role.get("unknown")
-        admin_data = _extract(admin) if admin else None
+        url      = group[0].get("url") or ""
 
+        # member에 대해서 guest 수직권한상승 확인
         if scenario == "member_only_guest_access":
-            if not member1 or not guest:
+            expected_r = by_role.get("member1")  # member 응답
+            attacker_r = by_role.get("guest")    # guest 응답
+
+            if not expected_r or not attacker_r: # 없을경우 스킵.
                 continue
 
-            member_data = _extract(member1)
-            guest_data = _extract(guest)
-            if not _is_success_content(member_data) or not _is_success_content(guest_data):
+            attacker_data = _extract(attacker_r)
+            if _is_blocked(attacker_data, login_url, home_url):
                 continue
 
-            sim = body_similarity(guest_data["body"], member_data["body"])
-            if sim >= SUSPICIOUS_RATIO:
-                evidence = (
-                    f"BAC member_only_guest_access: 'guest'가 member 전용 URL '{url}'에 접근 성공 "
-                    f"(member 유사도={sim:.0%}, size={guest_data['size']})"
-                )
-            else:
-                evidence = (
-                    f"BAC member_only_guest_access: 'guest'가 member 전용 URL '{url}'에 접근 성공 "
-                    f"(status=200, size={guest_data['size']}, 로그인/권한거부 페이지 아님)"
-                )
-            detected.append({"result": guest, "evidence": evidence})
-            continue
+            expected_data = _extract(expected_r)
+            if _is_blocked(expected_data, login_url, home_url): # 기준 응답 자체가 차단됨
+                continue
+            if is_similar(attacker_data["body"], expected_data["body"]):
+                detected.append({
+                    "result":   attacker_r,
+                    "evidence": (
+                        f"BAC member_only: 'guest'가 member 전용 URL '{url}'에 접근이 가능한 것 같습니다."
+                        f"(size={attacker_data['size']})"
+                    ),
+                })
 
-        for low_role_name, low_resp in [("member1", member1), ("guest", guest)]:
-            if not low_resp:
+        # admin에 대해서 member, guest 수직권한상승 확인
+        else:
+            expected_r = by_role.get("admin")
+            if not expected_r:
                 continue
 
-            data = _extract(low_resp)
-            if not _is_success_content(data):
+            expected_data = _extract(expected_r)
+            if _is_blocked(expected_data, login_url, home_url): # 기준 응답 자체가 차단됨
                 continue
 
-            if admin_data and admin_data["status"] == 200:
-                sim = body_similarity(data["body"], admin_data["body"])
-                if sim >= ADMIN_SIMILARITY_THRES:
-                    evidence = (
-                        f"BAC vertical_escalation: '{low_role_name}'이 admin과 유사 "
-                        f"(유사도 {sim:.0%}, size={data['size']} vs admin={admin_data['size']})"
-                    )
-                    detected.append({"result": low_resp, "evidence": evidence})
-                elif sim >= SUSPICIOUS_RATIO:
-                    evidence = (
-                        f"BAC suspected: '{low_role_name}'이 admin과 부분 유사 "
-                        f"(유사도 {sim:.0%}, 수동 확인 필요)"
-                    )
-                    detected.append({"result": low_resp, "evidence": evidence})
-            else:
-                evidence = (
-                    f"BAC vertical_escalation: '{low_role_name}' 권한으로 '{url}' 접근 성공 "
-                    f"(status=200, size={data['size']}, 로그인 페이지 아님)"
-                )
-                detected.append({"result": low_resp, "evidence": evidence})
+            for role_name in ("member1", "guest"):
+                attacker_r = by_role.get(role_name)
+                if not attacker_r:
+                    continue
+
+                attacker_data = _extract(attacker_r)
+                if _is_blocked(attacker_data, login_url, home_url):
+                    continue
+
+                if is_similar(attacker_data["body"], expected_data["body"]):
+                    detected.append({
+                        "result":   attacker_r,
+                        "evidence": (
+                            f"BAC admin only: '{role_name}'이 admin url에 접근이 가능한 것 같습니다."
+                            f"(size={attacker_data['size']} vs admin={expected_data['size']}, url='{url}')"
+                        ),
+                    })
 
     return detected
-
-
-def detect_idor_group(_results: list[dict]) -> list[dict]:
-    """IDOR 판정 - 추후 구현 예정."""
-    return []

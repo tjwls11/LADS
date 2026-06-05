@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .sqli_analyzer import validate_sqli, detect_boolean_group, detect_orderby_group, detect_probe_group
 from .xss_analyzer  import validate_xss
-from .bac_analyzer  import validate_bac, detect_bac_group
+from .bac_analyzer  import detect_bac_group
 from utilities import load_json, save_json
 from findings import (
     make_finding,
@@ -13,7 +13,7 @@ from findings import (
 
 __all__ = [
     "run", "validate",
-    "validate_sqli", "validate_xss", "validate_bac",
+    "validate_sqli", "validate_xss",
     "detect_boolean_group", "detect_orderby_group", "detect_probe_group", "detect_bac_group",
 ]
 
@@ -79,7 +79,7 @@ def _validate_single(r: dict) -> tuple[bool, str]:
     if "sqli" in vt or "sql" in vt:
         return validate_sqli(r)
     if "bac" in vt or "broken_access" in vt or "auth" in vt:
-        return validate_bac(r)
+        return False, ""
 
     ok, ev = validate_xss(r)
     if ok:
@@ -87,7 +87,7 @@ def _validate_single(r: dict) -> tuple[bool, str]:
     return validate_sqli(r)
 
 
-def validate(results: list[dict], progress_callback=None) -> list[dict]:
+def validate(results: list[dict], progress_callback=None, login_url: str = "", home_url: str = "") -> list[dict]:
     findings: list[dict] = []
     found_ids: set = set()
     total = len(results)
@@ -103,7 +103,7 @@ def validate(results: list[dict], progress_callback=None) -> list[dict]:
             found_ids.add(r.get("id"))
 
     # Phase 2: 그룹 분석
-    for detector in [detect_boolean_group, detect_probe_group, detect_orderby_group, detect_bac_group]:
+    for detector in [detect_boolean_group, detect_probe_group, detect_orderby_group]:
         for item in detector(results):
             r        = item["result"]
             evidence = item["evidence"]
@@ -111,6 +111,14 @@ def validate(results: list[dict], progress_callback=None) -> list[dict]:
                 continue
             findings.append(_make_finding(r, evidence))
             found_ids.add(r.get("id"))
+
+    for item in detect_bac_group(results, login_url=login_url, home_url=home_url):
+        r        = item["result"]
+        evidence = item["evidence"]
+        if r.get("id") in found_ids:
+            continue
+        findings.append(_make_finding(r, evidence))
+        found_ids.add(r.get("id"))
 
     return findings
 

@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 from dataclasses import asdict
 
 from crawl.auth import make_login, load_cookies, save_cookies
+import crawl.auth as _crawl_auth
 from crawl.crawler import Crawler
 from crawl.target_builder import build_targets
 from payload.generator import run as generate_run
@@ -85,6 +86,13 @@ def _task_bac_crawl(run_path_fn, target_url, emit_progress=None):
     ensure_parent_dir(crawl_file)
     save_cookies(run_path_fn, role_sessions)
 
+    if _crawl_auth.LOGIN_URL:
+        meta_file = run_path_fn("run_meta.json")
+        meta = load_json(meta_file, {})
+        meta["login_url"] = _crawl_auth.LOGIN_URL
+        save_json(meta_file, meta)
+        print(f"[BAC CRAWL] login_url 저장됨: {_crawl_auth.LOGIN_URL}")
+
     role_pages: dict[str, list[dict]] = {}
     n_roles = max(len(role_sessions), 1)
     prog_per_role = 18 // n_roles
@@ -159,8 +167,8 @@ def _task_bac_stream(run_path_fn, target_url=None, emit_progress=None):
     _task_bac_crawl(run_path_fn, target_url,
                     emit_progress=lambda pct: _prog(emit_progress, int(pct * 20 / 20)))
 
-    # 2. 수직 권한 상승 프로브 (크롤 시 이미 쿠키 갱신됨, 재로그인 불필요)
-    _task_bac_vertical(run_path_fn, target_url=None,
+    # 2. 수직 권한 상승 프로브 (probe 직전 재로그인으로 세션 갱신)
+    _task_bac_vertical(run_path_fn, target_url=target_url,
                        emit_progress=lambda pct: _prog(emit_progress, 20 + int(pct * 70 / 100)))
 
     bac_results_file = run_path_fn("bac_vertical_results.json")
@@ -173,7 +181,10 @@ def _task_bac_stream(run_path_fn, target_url=None, emit_progress=None):
 
     results = load_json(bac_results_file, [])
 
-    findings = analyze_results(results)
+    run_meta  = load_json(run_path_fn("run_meta.json"), {})
+    login_url = run_meta.get("login_url", "")
+    home_url  = run_meta.get("target_url", "")
+    findings = analyze_results(results, login_url=login_url, home_url=home_url)
     save_findings(findings, bac_findings_file)
     bac_cnt = sum(1 for f in findings if f.get("module") == "bac")
     print(f"[BAC] 분석 완료: findings={len(findings)}, bac={bac_cnt}")

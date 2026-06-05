@@ -17,6 +17,8 @@ sum_log.txt
 
 # 테스트용
 newbase.py
+z_checkset/
+CLAUDE.md
 
 # Debug logs
 debug-*.log

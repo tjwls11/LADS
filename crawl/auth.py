@@ -1,4 +1,3 @@
-import os
 import sys
 import json
 from dataclasses import dataclass, field
@@ -6,26 +5,22 @@ from typing import Optional
 from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv
 from utilities import load_json
 from typing import Callable
 
 
 # =====
-# 환경 변수 / 상수
+# 로그인 설정 (app.py의 _apply_active_target_env에서 세팅됨)
 # =====
-load_dotenv()
-
-# 로그인 관련 환경 변수
-LOGIN_URL = os.getenv("LOGIN_URL", "")
-LOGIN_METHOD = os.getenv("LOGIN_METHOD", "POST").upper()
-LOGIN_ID_1 = os.getenv("LOGIN_ID_1", "")
-LOGIN_PASSWORD_1 = os.getenv("LOGIN_PASSWORD_1", "")
-LOGIN_ID_2 = os.getenv("LOGIN_ID_2", "")
-LOGIN_PASSWORD_2 = os.getenv("LOGIN_PASSWORD_2", "")
-LOGIN_FAIL_INDICATOR = os.getenv("LOGIN_FAIL_INDICATOR", "")
-ADMIN_ID = os.getenv("ADMIN_ID", "")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+LOGIN_URL          = ""
+LOGIN_METHOD       = "POST"
+LOGIN_ID_1         = ""
+LOGIN_PASSWORD_1   = ""
+LOGIN_ID_2         = ""
+LOGIN_PASSWORD_2   = ""
+LOGIN_FAIL_INDICATOR = ""
+ADMIN_ID           = ""
+ADMIN_PASSWORD     = ""
 _TIMEOUT = 10
 
 # 인증상태 탐지용 힌트
@@ -318,20 +313,17 @@ def discover_login_url(base_url: str, timeout: int = _TIMEOUT) -> str:
     return ""
 
 
-# env는 수정하지 않고 현재 프로세스에서만 LOGIN_URL 확정
 def ensure_login_url(base_url: str, timeout: int = _TIMEOUT) -> str:
     global LOGIN_URL
 
-    current = os.getenv("LOGIN_URL", "") or LOGIN_URL
-    if current:
-        return current
+    if LOGIN_URL:
+        return LOGIN_URL
 
     discovered = discover_login_url(base_url, timeout=timeout)
     if not discovered:
         return ""
 
     LOGIN_URL = discovered
-    os.environ["LOGIN_URL"] = discovered
     print(f"[AUTH] LOGIN_URL 찾음: {discovered}")
     return discovered
 
@@ -440,7 +432,7 @@ def make_login(
     if "guest" in requested_roles:
         role_sessions["guest"] = {}
 
-    url = url or os.getenv("LOGIN_URL", "") or ensure_login_url(base_url, timeout=timeout)
+    url = url or ensure_login_url(base_url, timeout=timeout)
     if not url:
         print("[AUTH - FAIL] login URL이 설정되지 않았고, 자동검색에 실패함", file=sys.stderr)
         return role_sessions
