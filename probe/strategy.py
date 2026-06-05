@@ -39,8 +39,6 @@ _REC_TYPE_TO_CATEGORY: dict[str, str] = {
     "ERROR_BASED":  "error",
     "TIME_BASED":   "time",
     "SQLI_ORDERBY": "order_by",
-    "UNION":        "union",
-    "SQLI_LOGIN":   "login",
     "SQLI_FIELD":   "error",
     "SQLI_STRING":  "error",
 }
@@ -70,9 +68,7 @@ def _sqli_role(category: str | None, payload: str | None) -> str | None:
         if "extractvalue" in payload_text or "updatexml" in payload_text or "sleep" in payload_text:
             return "invalid_order"
         return "valid_order"
-    if category == "union":
-        return "union_attack"
-    if category in {"error", "login"}:
+    if category == "error":
         return "attack"
     return None
 
@@ -96,11 +92,6 @@ def _should_skip(name: str, value: str, field_type: str) -> bool:
 
 
 def _infer_types(field_type: str, action_url: str, param_name: str) -> list[str]:
-    if "login_check" in action_url:
-        if param_name in ("mb_id", "mb_password"):
-            return ["sqli_login"]
-    if field_type == "password":
-        return ["sqli_login"]
     if field_type in ("text", "input", "email"):
         return ["sqli_string", "xss_search"]
     if field_type == "url_param":
@@ -131,7 +122,6 @@ def _get_baseline_records_by_type(vtype: str) -> list[dict]:
         ctx_map = {
             "sqli_field":   "field_selector",
             "sqli_orderby": "orderby",
-            "sqli_login":   "auth",
         }
         ctx = ctx_map.get(vtype, "like_string")
         for bp in get_by_sql_context(ctx, "INSANE"):
