@@ -214,8 +214,15 @@ def generate(run_id: str, run_dir: str) -> bytes:
         conf     = f.get("confidence", "")
         sev      = _severity(conf)
         count    = f.get("payload_count", 1)
+        verdict  = (f.get("extra") or {}).get("verdict", "")
         tc       = _sev_colors.get(sev, (60, 60, 60))
         bg       = _sev_bg.get(sev,    (242, 244, 246))
+
+        _verdict_label = {
+            "confirmed": "CONFIRMED",
+            "suspected":  "SUSPECTED",
+            "candidate":  "CANDIDATE",
+        }.get(verdict, sev)
 
         # 항목 헤더
         pdf.set_fill_color(*bg)
@@ -225,12 +232,12 @@ def generate(run_id: str, run_dir: str) -> bytes:
         pdf.set_text_color(9, 20, 38)
         pdf.cell(0, 9, f"  [{i}]  {vtype}  —  {category}", fill=True, new_x="LMARGIN", new_y="NEXT")
 
-        # 심각도 + 페이로드 수 뱃지 (헤더 오른쪽)
-        pdf.set_xy(155, y_start + 0.5)
+        # verdict 뱃지 (헤더 오른쪽)
+        pdf.set_xy(140, y_start + 0.5)
         pdf.set_fill_color(*tc)
         pdf.set_text_color(255, 255, 255)
         pdf.set_font(FB, "B", 8)
-        pdf.cell(22, 8, f" {sev} ", fill=True, align="C")
+        pdf.cell(30, 8, f" {_verdict_label} ", fill=True, align="C")
         if count > 1:
             pdf.set_fill_color(80, 80, 80)
             pdf.cell(15, 8, f" x{count} ", fill=True, align="C")

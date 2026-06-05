@@ -105,11 +105,10 @@ def _infer_types(field_type: str, action_url: str, param_name: str) -> list[str]
     return ["sqli_string"]
 
 
-
 def _get_baseline_records_by_type(vtype: str) -> list[dict]:
     records: list[dict] = []
     if "xss" in vtype:
-        from payload.baseline.xss import get_by_strength as xss_get_by_strength
+        from attack.xss import get_by_strength as xss_get_by_strength
         # get_by_strength("INSANE"): BODY+ATTR_VALUE+FILTER_BYPASS+SCRIPT_CONTEXT+STORED 전체 ~80개
         for bp in xss_get_by_strength("INSANE"):
             records.append({

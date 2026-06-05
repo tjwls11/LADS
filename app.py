@@ -661,7 +661,9 @@ def findings_page():
             exec_results = load_json(exec_file, [])
             for r in exec_results:
                 hit = findings_by_id.get(r.get("id"))
-                r["_vulnerable"] = hit is not None
+                verdict = (hit.get("extra") or {}).get("verdict", "confirmed") if hit else None
+                r["_vulnerable"] = hit is not None and verdict == "confirmed"
+                r["_warning"]    = hit is not None and verdict in ("suspected", "candidate")
                 r["_evidence"] = hit.get("evidence", "") if hit else ""
                 r["_vuln_type"] = hit.get("type") or hit.get("module", "") if hit else (r.get("meta") or {}).get("vuln_type", "")
                 r["_extra"] = hit.get("extra") or {} if hit else {}
