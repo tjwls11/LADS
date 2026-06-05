@@ -4,6 +4,7 @@ import json
 import os
 import io
 import queue
+import secrets
 import subprocess
 import sys
 import shutil
@@ -46,6 +47,7 @@ load_dotenv()
 
 
 TARGETS_CONFIG_FILE = "targets_config.json"
+ACTIVE_TARGET_FILE  = "active_target.json"
 RUNS_DIR = "runs"
 
 def _load_targets() -> list[dict]:
@@ -73,6 +75,19 @@ def _load_targets() -> list[dict]:
 
 def _save_targets(targets: list[dict]) -> None:
     save_json(TARGETS_CONFIG_FILE, targets)
+
+
+def _load_active_target_key(targets: list[dict]) -> str:
+    if os.path.exists(ACTIVE_TARGET_FILE):
+        data = load_json(ACTIVE_TARGET_FILE, {})
+        key = data.get("key", "")
+        if any(t["key"] == key for t in targets):
+            return key
+    return targets[0]["key"] if targets else ""
+
+
+def _save_active_target_key(key: str) -> None:
+    save_json(ACTIVE_TARGET_FILE, {"key": key})
 
 
 def _apply_active_target_env(target: dict) -> None:
@@ -104,9 +119,10 @@ def _apply_active_target_env(target: dict) -> None:
 
 
 _TARGETS: list[dict] = _load_targets()
-_active_target_key: str = _TARGETS[0]["key"] if _TARGETS else ""
-if _TARGETS:
-    _apply_active_target_env(_TARGETS[0])
+_active_target_key: str = _load_active_target_key(_TARGETS)
+_active_target = next((t for t in _TARGETS if t["key"] == _active_target_key), _TARGETS[0] if _TARGETS else None)
+if _active_target:
+    _apply_active_target_env(_active_target)
 _current_run_id: str | None = None
 
 app = Flask(__name__, template_folder='web/templates', static_folder='web/static')
@@ -210,8 +226,33 @@ def _unsubscribe(q: queue.Queue) -> None:
 
 
 
-def _make_run_id() -> str:
-    return datetime.now().strftime("run_%Y%m%d_%H%M%S")
+def _run_task_name(run_type: str) -> str:
+    return "all" if run_type == "main" else run_type
+
+
+def _make_run_id(run_type: str) -> str:
+    task_name = _run_task_name(run_type)
+    date_part = datetime.now().strftime("%Y%m%d")
+    random_part = secrets.token_hex(3)
+    return f"run-{task_name}-{date_part}-{random_part}"
+
+
+def _is_run_id(name: str) -> bool:
+    return name.startswith("run_") or name.startswith("run-")
+
+
+def _run_created_label(run_id: str) -> str:
+    try:
+        return datetime.strptime(run_id, "run_%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        pass
+    parts = run_id.split("-")
+    if len(parts) >= 4 and parts[0] == "run":
+        try:
+            return datetime.strptime(parts[2], "%Y%m%d").strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    return run_id
 
 
 def _run_dir(run_id: str) -> str:
@@ -244,7 +285,7 @@ def _write_run_meta(run_id: str, run_type: str) -> None:
 
 
 def _create_run(run_type: str) -> str:
-    run_id = _make_run_id()
+    run_id = _make_run_id(run_type)
     os.makedirs(_run_dir(run_id), exist_ok=True)
     _write_run_meta(run_id, run_type)
     return run_id
@@ -256,7 +297,7 @@ def _list_run_ids() -> list[str]:
     return sorted(
         [
             d for d in os.listdir(RUNS_DIR)
-            if os.path.isdir(os.path.join(RUNS_DIR, d)) and d.startswith("run_")
+            if os.path.isdir(os.path.join(RUNS_DIR, d)) and _is_run_id(d)
         ],
         reverse=True,
     )
@@ -447,15 +488,14 @@ def _list_runs() -> list[dict]:
         if not os.path.isdir(full) or not d.startswith("run_"):
             continue
         files = set(os.listdir(full))
-        try:
-            ts = datetime.strptime(d, "run_%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            ts = d
+        ts = _run_created_label(d)
         run_type = _infer_run_type(d)
+
         findings_cnt = 0
         for findings_file in ("findings.json", "bac_findings.json"):
             if findings_file in files:
                 findings_cnt += len(load_json(os.path.join(full, findings_file), []))
+
         runs.append({
             "id": d,
             "ts": ts,
@@ -591,6 +631,41 @@ def bac_page():
 @app.route("/results")
 def results_page():
     return redirect("/findings")
+
+
+def _group_findings_by_url(findings: list[dict]) -> list[dict]:
+    from collections import defaultdict
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for f in findings:
+        url = f.get("url") or f.get("point") or "unknown"
+        groups[url].append(f)
+
+    result = []
+    for url, items in groups.items():
+        danger  = sum(1 for f in items if "CONFIRMED" in (f.get("type") or ""))
+        warning = sum(1 for f in items if "WARNING"   in (f.get("type") or ""))
+        slim_items = [
+            {
+                "status_label": "danger" if "CONFIRMED" in (f.get("type") or "") else "warning",
+                "vuln_type":    f.get("module") or "",
+                "param":        f.get("param") or "",
+                "payload":      str(f.get("payload") or "")[:120],
+                "status":       f.get("status"),
+                "evidence":     str(f.get("evidence") or "")[:200],
+            }
+            for f in items
+        ]
+        result.append({
+            "url":     url,
+            "danger":  danger,
+            "warning": warning,
+            "error":   0,
+            "safe":    0,
+            "total":   len(items),
+            "items":   slim_items,
+        })
+
+    return sorted(result, key=lambda x: (-x["danger"], -x["warning"], -x["total"]))
 
 
 def _group_results_by_url(all_results: list[dict]) -> list[dict]:
@@ -756,6 +831,7 @@ def set_target():
     if target:
         _active_target_key = key
         _apply_active_target_env(target)
+        _save_active_target_key(key)
     return redirect("/targets")
 
 
@@ -796,6 +872,7 @@ def delete_target():
         _active_target_key = _TARGETS[0]["key"] if _TARGETS else ""
         if _TARGETS:
             _apply_active_target_env(_TARGETS[0])
+        _save_active_target_key(_active_target_key)
     return redirect("/targets")
 
 
@@ -850,10 +927,7 @@ def run_detail(run_id):
     if not os.path.isdir(run_dir):
         return "존재하지 않는 런입니다.", 404
 
-    try:
-        ts = datetime.strptime(run_id, "run_%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        ts = run_id
+    ts = _run_created_label(run_id)
 
     files = set(os.listdir(run_dir))
     run_type = _infer_run_type(run_id)
@@ -897,6 +971,8 @@ def run_detail(run_id):
     exec_timeout = sum(1 for r in exec_results if r.get("error") == "timeout")
     exec_err = sum(1 for r in exec_results if r.get("error") and r.get("error") != "timeout")
 
+    url_groups = _group_findings_by_url(findings)
+
     return render_template(
         "run_detail.html",
         run_id=run_id,
@@ -909,6 +985,7 @@ def run_detail(run_id):
         has_exec="execution_results.json" in files or "bac_vertical_results.json" in files,
         has_findings="findings.json" in files or "bac_findings.json" in files,
         findings=findings,
+        url_groups=url_groups,
         xss_cnt=xss_cnt,
         sqli_cnt=sqli_cnt,
         bac_cnt=bac_cnt,
@@ -936,7 +1013,7 @@ def set_run(run_id):
 def delete_run(run_id):
     global _current_run_id
     run_dir = os.path.join(RUNS_DIR, run_id)
-    if os.path.isdir(run_dir) and run_id.startswith("run_"):
+    if os.path.isdir(run_dir) and _is_run_id(run_id):
         shutil.rmtree(run_dir)
         if _current_run_id == run_id:
             _init_run()

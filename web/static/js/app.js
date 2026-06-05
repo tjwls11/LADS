@@ -1,16 +1,81 @@
 function toggleMenu(force) {
-  var sidebar = document.getElementById('sidebar')
+  var shell = document.getElementById('app-shell') || document.body
   var backdrop = document.getElementById('sidebar-backdrop')
-  if (!sidebar) return
-  var isOpen = !sidebar.classList.contains('-translate-x-full')
+  if (!shell) return
+  var isOpen = shell.classList.contains('sidebar-open')
   var shouldOpen = force === true ? true : force === false ? false : !isOpen
-  if (shouldOpen) {
-    sidebar.classList.remove('-translate-x-full')
-    if (backdrop) backdrop.classList.remove('hidden')
+  shell.classList.toggle('sidebar-open', shouldOpen)
+  try {
+    localStorage.setItem('lads-sidebar-open', shouldOpen ? '1' : '0')
+  } catch (e) {}
+  syncMenuBackdrop()
+}
+
+function syncMenuBackdrop() {
+  var shell = document.getElementById('app-shell') || document.body
+  var backdrop = document.getElementById('sidebar-backdrop')
+  if (!shell || !backdrop) return
+  var showBackdrop =
+    shell.classList.contains('sidebar-open') && window.innerWidth < 768
+  if (showBackdrop) {
+    backdrop.classList.add('is-visible')
   } else {
-    sidebar.classList.add('-translate-x-full')
-    if (backdrop) backdrop.classList.add('hidden')
+    backdrop.classList.remove('is-visible')
   }
+}
+
+function setSidebarWidth(width) {
+  var shell = document.getElementById('app-shell') || document.body
+  if (!shell) return
+  var min = 150
+  var max = Math.min(440, Math.max(260, window.innerWidth - 360))
+  var next = Math.max(min, Math.min(max, width))
+  shell.style.setProperty('--sidebar-width', next + 'px')
+  shell.classList.toggle('sidebar-compact', next < 210)
+  try {
+    localStorage.setItem('lads-sidebar-width', String(next))
+  } catch (e) {}
+}
+
+function initSidebarResize() {
+  var resizer = document.getElementById('sidebar-resizer')
+  if (!resizer) return
+  var saved = null
+  try {
+    saved = parseInt(localStorage.getItem('lads-sidebar-width'), 10)
+  } catch (e) {}
+  if (saved && window.innerWidth >= 768) setSidebarWidth(saved)
+
+  resizer.addEventListener('pointerdown', function (event) {
+    if (window.innerWidth < 768) return
+    event.preventDefault()
+    resizer.classList.add('is-resizing')
+    document.body.style.cursor = 'ew-resize'
+    document.body.style.userSelect = 'none'
+    if (resizer.setPointerCapture) resizer.setPointerCapture(event.pointerId)
+
+    function move(e) {
+      setSidebarWidth(e.clientX)
+    }
+
+    function up(e) {
+      resizer.classList.remove('is-resizing')
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      if (resizer.releasePointerCapture) {
+        try {
+          resizer.releasePointerCapture(e.pointerId)
+        } catch (err) {}
+      }
+      document.removeEventListener('pointermove', move)
+      document.removeEventListener('pointerup', up)
+      document.removeEventListener('pointercancel', up)
+    }
+
+    document.addEventListener('pointermove', move)
+    document.addEventListener('pointerup', up)
+    document.addEventListener('pointercancel', up)
+  })
 }
 
 var _es = null
@@ -57,6 +122,7 @@ function startScanSkipCrawl() {
 
 function _setButtons(disabled) {
   document.querySelectorAll('button').forEach(function (btn) {
+    if (btn.hasAttribute('data-menu-toggle')) return
     btn.disabled = disabled
   })
 }
@@ -237,7 +303,9 @@ function _startStream(url) {
       if (!_hadError) {
         setTimeout(function () {
           if (_currentTask === 'all') {
-            window.location.href = '/findings'
+            fetch('/api/status').then(function(r){ return r.json(); }).then(function(s){
+              window.location.href = s.run_id ? '/runs/' + s.run_id : '/runs'
+            }).catch(function(){ window.location.href = '/runs' })
           } else {
             location.reload()
           }
@@ -393,6 +461,23 @@ function _pollScanStatus() {
 
 // 페이지 로드 시 즉시 확인 + 10초마다 폴링
 document.addEventListener('DOMContentLoaded', function () {
+  var shell = document.getElementById('app-shell') || document.body
+  var saved = null
+  try {
+    saved = localStorage.getItem('lads-sidebar-open')
+  } catch (e) {}
+  var shouldOpen = saved === null ? window.innerWidth >= 768 : saved === '1'
+  if (shell) shell.classList.toggle('sidebar-open', shouldOpen)
+  initSidebarResize()
+  syncMenuBackdrop()
+  window.addEventListener('resize', function () {
+    var savedWidth = null
+    try {
+      savedWidth = parseInt(localStorage.getItem('lads-sidebar-width'), 10)
+    } catch (e) {}
+    if (savedWidth && window.innerWidth >= 768) setSidebarWidth(savedWidth)
+    syncMenuBackdrop()
+  })
   _pollScanStatus()
   setInterval(_pollScanStatus, 10000)
 })

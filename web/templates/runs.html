@@ -17,12 +17,12 @@
     <div class="min-h-0 flex-1 overflow-auto px-6 py-5">
       <table class="w-full min-w-[800px] border-separate border-spacing-0 text-left text-[14px]" id="runs-table">
         <thead>
-          <tr class="text-[13px] font-bold text-slate-500" id="runs-thead">
-            <th class="sortable border-b border-surface-line px-3 pb-3 select-none">실행 ID <span class="sort-icon text-slate-300">↕</span></th>
-            <th class="sortable border-b border-surface-line px-3 pb-3 select-none">시작 시간 <span class="sort-icon text-slate-300">↕</span></th>
-            <th class="sortable border-b border-surface-line px-3 pb-3 select-none">크롤링 <span class="sort-icon text-slate-300">↕</span></th>
-            <th class="sortable border-b border-surface-line px-3 pb-3 select-none">실행 <span class="sort-icon text-slate-300">↕</span></th>
-            <th class="sortable border-b border-surface-line px-3 pb-3 select-none">취약점 <span class="sort-icon text-slate-300">↕</span></th>
+          <tr class="text-[13px] font-bold text-slate-500">
+            <th class="border-b border-surface-line px-3 pb-3">실행 ID</th>
+            <th class="border-b border-surface-line px-3 pb-3">시작 시간</th>
+            <th class="border-b border-surface-line px-3 pb-3">크롤링</th>
+            <th class="border-b border-surface-line px-3 pb-3">실행</th>
+            <th class="border-b border-surface-line px-3 pb-3">취약점</th>
             <th class="border-b border-surface-line px-3 pb-3"></th>
           </tr>
         </thead>
@@ -86,46 +86,4 @@
   </div>
   {% endif %}
 </section>
-{% endblock %}
-{% block scripts %}
-<style>
-  #runs-table th { position: relative; }
-  .sortable { cursor: pointer; }
-  .sortable:hover { color: #334155; }
-  .sort-asc .sort-icon::after  { content: ' ↑'; color: #1e293b; }
-  .sort-desc .sort-icon::after { content: ' ↓'; color: #1e293b; }
-  .sort-asc .sort-icon, .sort-desc .sort-icon { font-size: 0; }
-  .sort-asc .sort-icon::after, .sort-desc .sort-icon::after { font-size: 13px; }
-</style>
-<script>
-(function () {
-  var thead = document.getElementById('runs-thead');
-  if (!thead) return;
-  var table = thead.closest('table');
-  var tbody = table.querySelector('tbody');
-
-  var sortCol = -1, sortAsc = true;
-
-  thead.querySelectorAll('th.sortable').forEach(function (th, i) {
-    th.addEventListener('click', function () {
-      sortAsc = (sortCol === i) ? !sortAsc : true;
-      sortCol = i;
-      thead.querySelectorAll('th').forEach(function (h) {
-        h.classList.remove('sort-asc', 'sort-desc');
-      });
-      th.classList.add(sortAsc ? 'sort-asc' : 'sort-desc');
-
-      var rows = Array.from(tbody.querySelectorAll('tr'));
-      rows.sort(function (a, b) {
-        var av = (a.cells[i] && a.cells[i].textContent.trim()) || '';
-        var bv = (b.cells[i] && b.cells[i].textContent.trim()) || '';
-        var an = parseFloat(av), bn = parseFloat(bv);
-        if (!isNaN(an) && !isNaN(bn)) return sortAsc ? an - bn : bn - an;
-        return sortAsc ? av.localeCompare(bv, 'ko') : bv.localeCompare(av, 'ko');
-      });
-      rows.forEach(function (r) { tbody.appendChild(r); });
-    });
-  });
-})();
-</script>
 {% endblock %}

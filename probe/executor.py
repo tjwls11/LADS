@@ -315,6 +315,7 @@ def execute(
     output_file: str | None = None,
     progress_callback=None,
     workers: int = 10,
+    enable_recheck: bool = False,
 ) -> list[dict]:
     # probe task -> HTTP 병렬 전송 -> results
 
@@ -325,8 +326,8 @@ def execute(
     _done = [0]
 
     def _run(idx: int, t: dict) -> None:
-        session = _get_session()
-        result = _execute_single(t, session, timeout, delay)
+        session = _make_session()
+        result = execute(t, session, timeout, delay)
         results[idx] = result
         if progress_callback and total > 0:
             with _lock:
@@ -343,7 +344,7 @@ def execute(
 
     final_results = [r for r in results if r is not None]
 
-    if enable_recheck:
+    if enable_recheck:   # 실패한 요청 재시도
         recheck_tasks = build_recheck_tasks(tasks, results)
         if recheck_tasks:
             results.extend(
