@@ -12,7 +12,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from probe.repeat import build_recheck_tasks
+from probe.repeat import build_recheck_tasks    
 
 
 _HIDDEN_TAG_RE = re.compile(r"<input[^>]+>", re.IGNORECASE | re.DOTALL)
@@ -153,18 +153,19 @@ def execute(
                 "url": url,
                 "method": "GET",
                 "status": resp.status_code,
-                "length": len(resp.content) if resp.content is not None else None,
+                "length":         len(resp.content) if resp.content is not None else None,
+                "content_length": len(resp.content) if resp.content is not None else None,
                 "elapsed": round(elapsed, 3),
                 "response_body": body_text[:20000] if body_text else None,
             }
         except requests.Timeout:
             elapsed = time.perf_counter() - started
             return {**base, "url": url, "method": "GET", "status": None, "length": 0,
-                    "elapsed": round(elapsed, 3), "response_body": None, "error": "timeout"}
+                    "content_length": 0, "elapsed": round(elapsed, 3), "response_body": None, "error": "timeout"}
         except Exception as e:
             elapsed = time.perf_counter() - started
             return {**base, "url": url, "method": "GET", "status": None, "length": 0,
-                    "elapsed": round(elapsed, 3), "response_body": None, "error": f"exception:{type(e).__name__}"}
+                    "content_length": 0, "elapsed": round(elapsed, 3), "response_body": None, "error": f"exception:{type(e).__name__}"}
 
     if payload is None or not inject_param:
         return {**base, "error": "invalid_task"}
@@ -277,7 +278,8 @@ def execute(
             "url": url,
             "method": method,
             "status": resp.status_code,
-            "length": len(resp.content) if resp.content is not None else None,
+            "length":         len(resp.content) if resp.content is not None else None,
+            "content_length": len(resp.content) if resp.content is not None else None,
             "elapsed": round(elapsed, 3),
             "response_body": body_text[:20000] if body_text else None,
             "verify_body": verify_body,
@@ -290,6 +292,7 @@ def execute(
             "method": method,
             "status": None,
             "length": 0,
+            "content_length": 0,
             "elapsed": round(elapsed, 3),
             "response_body": None,
             "error": "timeout",
@@ -302,6 +305,7 @@ def execute(
             "method": method,
             "status": None,
             "length": 0,
+            "content_length": 0,
             "elapsed": round(elapsed, 3),
             "response_body": None,
             "error": f"exception:{type(e).__name__}",
