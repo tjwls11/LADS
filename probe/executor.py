@@ -138,6 +138,7 @@ def execute(
                     "method": method,
                     "status": resp.status_code,
                     "length": len(resp.content) if resp.content is not None else None,
+                    "content_length": len(resp.content) if resp.content is not None else None,
                     "elapsed": round(elapsed, 3),
                     "response_body": body_text[:20000] if body_text else None,
                 })
@@ -237,6 +238,7 @@ def execute(
                     "method": method,
                     "status": resp.status_code,
                     "length": len(resp.content) if resp.content is not None else None,
+                    "content_length": len(resp.content) if resp.content is not None else None,
                     "elapsed": round(elapsed, 3),
                     "response_body": body_text[:20000] if body_text else None,
                 }
