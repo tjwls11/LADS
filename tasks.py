@@ -161,22 +161,40 @@ def _task_bac_stream(run_path_fn, target_url=None, emit_progress=None):
 
     # 2. 수직 권한 상승 프로브 (크롤 시 이미 쿠키 갱신됨, 재로그인 불필요)
     _task_bac_vertical(run_path_fn, target_url=None,
-                       emit_progress=lambda pct: _prog(emit_progress, 20 + int(pct * 70 / 100)))
+                       emit_progress=lambda pct: _prog(emit_progress, 20 + int(pct * 60 / 100)))
 
     bac_results_file = run_path_fn("bac_vertical_results.json")
     bac_findings_file = run_path_fn("bac_findings.json")
 
     if not os.path.exists(bac_results_file):
         print("[BAC] 실행 결과 없음 — 분석 건너뜀")
-        _prog(emit_progress, 100)
-        return
+    else:
+        results = load_json(bac_results_file, [])
+        findings = analyze_results(results)
+        save_findings(findings, bac_findings_file)
+        bac_cnt = sum(1 for f in findings if f.get("module") == "bac")
+        print(f"[BAC] 분석 완료: findings={len(findings)}, bac={bac_cnt}")
 
-    results = load_json(bac_results_file, [])
+    _prog(emit_progress, 80)
 
-    findings = analyze_results(results)
-    save_findings(findings, bac_findings_file)
-    bac_cnt = sum(1 for f in findings if f.get("module") == "bac")
-    print(f"[BAC] 분석 완료: findings={len(findings)}, bac={bac_cnt}")
+    # 3. 설정 오류 점검 (misconfig) — bac_findings.json 에 append
+    if target_url:
+        print(f"[MISCONFIG] 설정 오류 점검 시작: {target_url}")
+        try:
+            misconfig_findings = misconfig_run(
+                base_url=target_url,
+                output_file=bac_findings_file,
+                progress_callback=lambda done, total: _prog(
+                    emit_progress, 80 + int(done / max(total, 1) * 18)
+                ),
+                append=True,
+            )
+            confirmed = sum(1 for f in misconfig_findings if f.get("type") == "MISCONFIG_CONFIRMED")
+            warnings  = sum(1 for f in misconfig_findings if f.get("type") == "MISCONFIG_WARNING")
+            print(f"[MISCONFIG] confirmed={confirmed}, warning={warnings}")
+        except Exception as e:
+            print(f"[MISCONFIG] 오류: {e}")
+
     _prog(emit_progress, 100)
 
 

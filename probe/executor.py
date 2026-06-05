@@ -70,7 +70,7 @@ def _make_session() -> requests.Session:
     return s
 
 # 프로브 작업을 실행하고 필요한 SQLi 재현 요청까지 수행하여 반환
-def execute(
+def _execute_sequential(
     tasks: list[dict],
     timeout: int = 10,
     delay: float = 0.0,
@@ -330,9 +330,8 @@ def execute(
     _done = [0]
 
     def _run(idx: int, t: dict) -> None:
-        session = _make_session()
-        result = execute(t, session, timeout, delay)
-        results[idx] = result
+        res = _execute_sequential([t], timeout=timeout, delay=delay)
+        results[idx] = res[0] if res else {"error": "no_result"}
         if progress_callback and total > 0:
             with _lock:
                 _done[0] += 1
