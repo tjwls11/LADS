@@ -37,15 +37,13 @@
       <span class="font-mono text-[12px] text-slate-500">총 소요: <span class="font-black text-slate-800">{{ "%.0f"|format(step_timing.total // 60) }}분 {{ "%.0f"|format(step_timing.total % 60) }}초</span></span>
       {% endif %}
     </div>
-    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-7">
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5">
       {% set steps = [
         ('크롤링',      has_crawl,    'travel_explore', 'crawl'),
         ('페이로드',    has_payload,  'psychology',     'payload'),
         ('주입 테스트', has_probe,    'radar',          'probe'),
         ('실행',        has_exec,     'terminal',       'execute'),
         ('취약점 판정', has_findings, 'analytics',      'validate'),
-        ('BAC',         has_findings, 'shield_person',  'bac'),
-        ('Misconfig',   has_findings, 'security',       'misconfig'),
       ] %}
       {% for label, done, icon, key in steps %}
       {% set elapsed = step_timing.get(key) %}
@@ -319,8 +317,6 @@
     var k = (t||'').toLowerCase();
     if (k.indexOf('xss') !== -1)       return 'background:#fef3c7;color:#92400e;';
     if (k.indexOf('sql') !== -1)       return 'background:#fee2e2;color:#991b1b;';
-    if (k.indexOf('bac') !== -1)       return 'background:#f3e8ff;color:#6b21a8;';
-    if (k.indexOf('misconfig') !== -1) return 'background:#dbeafe;color:#1e40af;';
     return 'background:#f1f5f9;color:#475569;';
   }
 

@@ -31,7 +31,7 @@
           <tr class="cursor-pointer hover:bg-slate-50" onclick="location.href='/runs/{{ r.id }}'">
             <td class="border-b border-slate-100 px-3 py-4 font-mono text-[12px]">
               {{ r.id }}
-              <span class="ml-1 rounded px-1.5 py-0.5 text-[10px] font-black {% if r.run_type == 'bac' %}bg-orange-100 text-orange-700{% else %}bg-slate-100 text-slate-700{% endif %}">
+              <span class="ml-1 rounded px-1.5 py-0.5 text-[10px] font-black bg-slate-100 text-slate-700">
                 {{ r.run_type|upper }}
               </span>
               {% if r.is_current %}

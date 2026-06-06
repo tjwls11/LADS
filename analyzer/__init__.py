@@ -37,6 +37,10 @@ def _derive_module_type(vt: str) -> tuple[str, str]:
 
 
 def _derive_category(vt: str, evidence: str) -> str:
+    # XSS는 evidence/payload 문자열에 의한 오분류 방지를 위해 먼저 처리
+    if "xss" in vt:
+        return "reflected"
+    # SQLi 전용 category 추론
     ev = evidence.lower()
     if "time" in ev:
         return "time_based"
@@ -48,10 +52,6 @@ def _derive_category(vt: str, evidence: str) -> str:
         return "order_by"
     if "probe" in ev:
         return "boolean_probe"
-    if any(x in vt for x in ("subject", "content", "comment")):
-        return "stored"
-    if "search" in vt or "reflected" in vt or "xss" in vt:
-        return "reflected"
     return "unknown"
 
 
