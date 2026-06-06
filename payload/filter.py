@@ -16,8 +16,6 @@ ALLOWED_TYPES = {
     "UNION",
     "REFLECTED_XSS",
     "STORED_XSS",
-    "BAC",
-    "MISCONFIG",
     "XXE",
     "CSV_INJECTION",
 }
@@ -47,8 +45,6 @@ TYPE_PATTERNS = {
     "UNION":         [r"UNION\s+SELECT"],
     "REFLECTED_XSS": [r"<|>|on\w+=|javascript:|alert|eval"],
     "STORED_XSS":    [r"<|>|on\w+=|javascript:|alert|eval|fetch"],
-    "BAC":           [r"/|=|\?"],
-    "MISCONFIG":     [r"/|\.env|\.git|php|backup"],
     "XXE":           [r"<!|ENTITY|xml|SYSTEM"],
     "CSV_INJECTION": [r"^[=+\-@]"],
 }

@@ -20,8 +20,6 @@ from tasks import (
     _task_probe as _probe_impl,
     _task_execute as _execute_impl,
     _task_validate as _validate_impl,
-    _task_misconfig as _misconfig_impl,
-    _task_bac_stream as _bac_impl,
     _task_main_stream as _all_impl,
     TASK_LABELS as _TASK_LABELS,
 )
@@ -265,18 +263,6 @@ def _run_dir(run_id: str) -> str:
 
 
 def _infer_run_type(run_id: str) -> str:
-    run_dir = _run_dir(run_id)
-    meta = load_json(os.path.join(run_dir, "run_meta.json"), {})
-    run_type = meta.get("run_type")
-    if run_type in {"main", "bac"}:
-        return run_type
-
-    try:
-        files = set(os.listdir(run_dir))
-    except Exception:
-        return "main"
-    if "bac_vertical_results.json" in files or "bac_findings.json" in files or "bac_vertical_tasks.json" in files:
-        return "bac"
     return "main"
 
 
@@ -378,23 +364,14 @@ def _task_validate():
     _validate_impl(_run_path, _emit_progress)
 
 
-def _task_misconfig():
-    _misconfig_impl(_run_path, _active_url(), _emit_progress)
-
-
 def _task_all(skip_crawl: bool = False, resume: bool = False):
     _all_impl(_run_path, _active_url(), _run_path("payloads.json"), _run_path("payloads_meta.json"), skip_crawl=skip_crawl, resume=resume, emit_progress=_emit_progress)
-
-def _task_bac():
-    _bac_impl(_run_path, _active_url(), _emit_progress)
 
 _TASK_FUNCS = {
     "crawl":    _task_crawl,
     "probe":    _task_probe,
     "execute":  _task_execute,
     "validate": _task_validate,
-    "misconfig": _task_misconfig,
-    "bac":      _task_bac,
     "all":      _task_all,
 }
 
@@ -429,8 +406,6 @@ def stream_task(task):
                 skip_crawl = False
         elif task == "all":
             _current_run_id = _create_run("main")
-        elif task == "bac":
-            _current_run_id = _create_run("bac")
 
         with _log_lock:
             _log_buffer.clear()
@@ -496,9 +471,8 @@ def _list_runs() -> list[dict]:
         run_type = _infer_run_type(d)
 
         findings_cnt = 0
-        for findings_file in ("findings.json", "bac_findings.json"):
-            if findings_file in files:
-                findings_cnt += len(load_json(os.path.join(full, findings_file), []))
+        if "findings.json" in files:
+            findings_cnt = len(load_json(os.path.join(full, "findings.json"), []))
 
         runs.append({
             "id": d,
@@ -506,8 +480,8 @@ def _list_runs() -> list[dict]:
             "run_type": run_type,
             "is_current": d == _current_run_id,
             "has_crawl": "crawl_result.json" in files,
-            "has_exec": "execution_results.json" in files or "bac_vertical_results.json" in files,
-            "has_findings": "findings.json" in files or "bac_findings.json" in files,
+            "has_exec": "execution_results.json" in files,
+            "has_findings": "findings.json" in files,
             "findings_cnt": findings_cnt,
         })
     return runs
@@ -548,17 +522,6 @@ def _get_exec_summary():
         return {"total": total, "ok": ok, "timeout": timeout}
     except Exception:
         return None
-
-
-def _misconfig_done() -> bool:
-    p = _run_path("findings.json")
-    if not os.path.exists(p):
-        return False
-    try:
-        findings = load_json(p, [])
-        return any(fi.get("module") == "misconfig" for fi in findings)
-    except Exception:
-        return False
 
 
 def _get_pipeline_steps():
@@ -612,26 +575,6 @@ def index():
         summary=_get_quick_summary(),
         exec_summary=_get_exec_summary(),
         targets=_get_target_envs(),
-        current_run=_current_run_id or "",
-    )
-
-
-@app.route("/bac")
-def bac_page():
-    bac_findings_file = _run_path("bac_findings.json")
-    all_findings = load_json(bac_findings_file, [])
-    bac_findings = [f for f in all_findings if f.get("module") != "misconfig"]
-    misconfig_findings = [f for f in all_findings if f.get("module") == "misconfig"]
-    return render_template(
-        "bac.html",
-        bac_findings=bac_findings,
-        bac_cnt=len(bac_findings),
-        misconfig_findings=misconfig_findings,
-        misconfig_cnt=len(misconfig_findings),
-        has_crawl=os.path.exists(_run_path("crawl_result.json")),
-        has_bac_results=os.path.exists(_run_path("bac_vertical_results.json")),
-        has_bac_findings=os.path.exists(bac_findings_file),
-        has_misconfig=len(misconfig_findings) > 0,
         current_run=_current_run_id or "",
     )
 
@@ -718,8 +661,6 @@ def findings_page():
     run_id = request.args.get("run") or _current_run_id
     findings_file = _run_path("findings.json", run_id=run_id)
     exec_file = _run_path("execution_results.json", run_id=run_id)
-    bac_findings_file = _run_path("bac_findings.json", run_id=run_id)
-    bac_exec_file = _run_path("bac_vertical_results.json", run_id=run_id)
 
     findings = []
     if os.path.exists(findings_file):
@@ -729,15 +670,10 @@ def findings_page():
         except Exception as exc:
             return f"결과 파일 읽기 오류: {exc}", 500
 
-    findings.extend(load_json(bac_findings_file, []))
-
-    xss_cnt       = sum(1 for f in findings if f.get("module") == "xss")
-    sqli_cnt      = sum(1 for f in findings if f.get("module") == "sqli")
-    bac_cnt       = sum(1 for f in findings if f.get("module") == "bac")
-    misconfig_cnt = sum(1 for f in findings if f.get("module") == "misconfig")
+    xss_cnt  = sum(1 for f in findings if f.get("module") == "xss")
+    sqli_cnt = sum(1 for f in findings if f.get("module") == "sqli")
 
     all_results = []
-    safe_cnt = 0
     if os.path.exists(exec_file):
         try:
             findings_by_id = {f.get("id"): f for f in findings}
@@ -754,39 +690,6 @@ def findings_page():
         except Exception:
             pass
 
-    if os.path.exists(bac_exec_file):
-        try:
-            findings_by_id = {f.get("id"): f for f in findings}
-            bac_exec_results = load_json(bac_exec_file, [])
-            for r in bac_exec_results:
-                hit = findings_by_id.get(r.get("id"))
-                meta = r.get("meta") or {}
-                r["_vulnerable"] = hit is not None
-                r["_evidence"] = hit.get("evidence", "") if hit else ""
-                r["_vuln_type"] = hit.get("module", "") if hit else meta.get("vuln_type", "bac")
-                r["_role"] = meta.get("role", "")
-            all_results.extend(bac_exec_results)
-        except Exception:
-            pass
-
-    for mf in findings:
-        if mf.get("module") != "misconfig":
-            continue
-        is_confirmed = mf.get("type") == "MISCONFIG_CONFIRMED"
-        all_results.append({
-            "_vulnerable":  is_confirmed,
-            "_warning":     not is_confirmed,
-            "_evidence":    mf.get("evidence", ""),
-            "_vuln_type":   mf.get("type", "misconfig"),
-            "_extra":       mf.get("extra") or {},
-            "url":          mf.get("url", ""),
-            "method":       "GET",
-            "inject_param": None,
-            "payload":      "",
-            "status":       mf.get("status"),
-            "error":        None,
-        })
-
     safe_cnt = sum(1 for r in all_results if not r.get("_vulnerable") and not r.get("_warning") and not r.get("error"))
 
     url_groups = _group_results_by_url(all_results)
@@ -796,8 +699,6 @@ def findings_page():
         findings=findings,
         xss_cnt=xss_cnt,
         sqli_cnt=sqli_cnt,
-        bac_cnt=bac_cnt,
-        misconfig_cnt=misconfig_cnt,
         safe_cnt=safe_cnt,
         all_results=all_results,
         url_groups=url_groups,
@@ -948,21 +849,14 @@ def run_detail(run_id):
         except Exception:
             pass
 
-    findings, xss_cnt, sqli_cnt, bac_cnt, misconfig_cnt = [], 0, 0, 0, 0
+    findings, xss_cnt, sqli_cnt = [], 0, 0
     if "findings.json" in files:
         try:
             findings = load_json(os.path.join(run_dir, "findings.json"), [])
-            xss_cnt      = sum(1 for fi in findings if fi.get("module") == "xss")
-            sqli_cnt     = sum(1 for fi in findings if fi.get("module") == "sqli")
-            bac_cnt      = sum(1 for fi in findings if fi.get("module") == "bac")
-            misconfig_cnt = sum(1 for fi in findings if fi.get("module") == "misconfig")
+            xss_cnt  = sum(1 for fi in findings if fi.get("module") == "xss")
+            sqli_cnt = sum(1 for fi in findings if fi.get("module") == "sqli")
         except Exception:
             pass
-    if "bac_findings.json" in files:
-        findings.extend(load_json(os.path.join(run_dir, "bac_findings.json"), []))
-    xss_cnt = sum(1 for fi in findings if fi.get("module") == "xss")
-    sqli_cnt = sum(1 for fi in findings if fi.get("module") == "sqli")
-    bac_cnt = sum(1 for fi in findings if fi.get("module") == "bac")
 
     exec_results, exec_ok, exec_timeout, exec_err = [], 0, 0, 0
     if "execution_results.json" in files:
@@ -973,11 +867,6 @@ def run_detail(run_id):
             exec_err     = sum(1 for r in exec_results if r.get("error") and r.get("error") != "timeout")
         except Exception:
             pass
-    if "bac_vertical_results.json" in files:
-        exec_results.extend(load_json(os.path.join(run_dir, "bac_vertical_results.json"), []))
-    exec_ok = sum(1 for r in exec_results if r.get("error") is None)
-    exec_timeout = sum(1 for r in exec_results if r.get("error") == "timeout")
-    exec_err = sum(1 for r in exec_results if r.get("error") and r.get("error") != "timeout")
 
     url_groups = _group_findings_by_url(findings)
 
@@ -989,15 +878,13 @@ def run_detail(run_id):
         is_current=(run_id == _current_run_id),
         has_crawl="crawl_result.json" in files,
         has_targets="targets.json" in files,
-        has_probe="probe_tasks.json" in files or "bac_vertical_tasks.json" in files,
-        has_exec="execution_results.json" in files or "bac_vertical_results.json" in files,
-        has_findings="findings.json" in files or "bac_findings.json" in files,
+        has_probe="probe_tasks.json" in files,
+        has_exec="execution_results.json" in files,
+        has_findings="findings.json" in files,
         findings=findings,
         url_groups=url_groups,
         xss_cnt=xss_cnt,
         sqli_cnt=sqli_cnt,
-        bac_cnt=bac_cnt,
-        misconfig_cnt=misconfig_cnt,
         exec_results=exec_results,
         exec_total=len(exec_results),
         exec_ok=exec_ok,

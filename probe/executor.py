@@ -109,13 +109,6 @@ def _execute_sequential(
     base_params = dict(t.get("base_params") or {})
     base_headers = dict(t.get("base_headers") or {})
     base_cookies = dict(t.get("base_cookies") or {})
-    meta = t.get("meta") or {}
-    is_bac_task = "bac" in str(meta.get("vuln_type", "")).lower()
-
-    if is_bac_task:
-        session.cookies.clear()
-        session.cookies.update(base_cookies)
-
     if inject_mode == "noop":
         started = time.perf_counter()
         try:
@@ -158,10 +151,11 @@ def _execute_sequential(
             base_params.update(_fetch_fresh_csrf(session, src, timeout))
 
     injected = f"{base_value}{payload}" if inject_mode == "append" else str(payload)
-    params = None
-    data = None
-    headers = dict(base_headers)
-    cookies = dict(base_cookies)
+    params    = None
+    data      = None
+    json_body = None
+    headers   = dict(base_headers)
+    cookies   = dict(base_cookies)
 
     loc = str(inject_location).lower()
     if loc == "header":
@@ -172,6 +166,10 @@ def _execute_sequential(
         cookies[str(inject_param)] = injected
         data = dict(base_params) if method == "POST" else None
         params = None if method == "POST" else dict(base_params)
+    elif loc == "json":
+        # REQ-COMMON-001: JSON Body 주입 (application/json 엔드포인트)
+        json_body = dict(base_params)
+        json_body[str(inject_param)] = injected
     elif loc == "body":
         data = dict(base_params)
         data[str(inject_param)] = injected
@@ -183,7 +181,17 @@ def _execute_sequential(
     try:
         if method == "POST":
             enctype = str(t.get("enctype") or "").lower()
-            if "multipart" in enctype and data:
+            if json_body is not None:
+                resp = session.post(
+                    url,
+                    params=params,
+                    json=json_body,
+                    headers=headers,
+                    cookies=cookies,
+                    timeout=timeout,
+                    allow_redirects=True,
+                )
+            elif "multipart" in enctype and data:
                 resp = session.post(
                     url,
                     params=params,
@@ -281,7 +289,6 @@ def execute(
     def _session_for(t: dict) -> tuple[requests.Session, threading.Lock | None]:
         role = str((t.get("meta") or {}).get("role") or "").lower()
         if not role:
-            # TODO: Decide whether non-BAC tasks should reuse per-worker sessions for speed.
             return _make_session(), None
         with role_map_lock:
             if role not in role_sessions:

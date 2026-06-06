@@ -39,6 +39,20 @@ def _sample_diverse(payloads: list[dict], limit: int) -> list[dict]:
     return result
 
 
+def _expand_pairs(payloads: list[dict]) -> list[dict]:
+    """pair dict(true_payload/false_payload)을 단건 레코드로 펼친다."""
+    result: list[dict] = []
+    for p in payloads:
+        if "true_payload" in p or "false_payload" in p:
+            if "true_payload" in p:
+                result.append({**p, "payload": p["true_payload"],  "family": (p.get("family") or "") + "_true"})
+            if "false_payload" in p:
+                result.append({**p, "payload": p["false_payload"], "family": (p.get("family") or "") + "_false"})
+        else:
+            result.append(p)
+    return result
+
+
 def _select_baseline_payloads(point: dict, vuln_type: str) -> list[dict]:
     vt = (vuln_type or "").lower()
     value_shape = (point.get("value_shape") or "").lower()
@@ -53,30 +67,25 @@ def _select_baseline_payloads(point: dict, vuln_type: str) -> list[dict]:
         payloads = baseline_sqli.get_by_sql_context("orderby", "HIGH")
     elif vt.startswith("sqli_"):
         if value_shape == "number_like":
-            payloads = baseline_sqli.get_by_context("numeric", "HIGH")
+            payloads = baseline_sqli.get_by_sql_context("integer", "HIGH")
         else:
-            payloads = baseline_sqli.get_by_context("string", "HIGH")
+            payloads = baseline_sqli.get_by_sql_context("string_sq", "HIGH")
     elif vt == "xss_search":
         if field_type == "textarea":
             payloads = baseline_xss.get_by_context("body", "HIGH")
         else:
             payloads = baseline_xss.get_by_context("attr_value", "HIGH")
     elif vt in {"xss_subject", "xss_content", "xss_comment"}:
-        if field_type == "textarea":
-            payloads = baseline_xss.get_by_context("body", "HIGH")
-        else:
-            payloads = baseline_xss.get_by_context("stored", "HIGH")
+        payloads = baseline_xss.get_by_context("body", "HIGH")
     elif vt.startswith("xss_"):
-        if location in ("header", "cookie"):
-            payloads = baseline_xss.get_by_context("filter_bypass", "HIGH")
-        elif field_type == "textarea":
+        if field_type == "textarea":
             payloads = baseline_xss.get_by_context("body", "HIGH")
         else:
             payloads = baseline_xss.get_by_context("reflected", "HIGH")
     else:
         payloads = []
 
-    return _sample_diverse(payloads, BASELINE_LIMIT)
+    return _sample_diverse(_expand_pairs(payloads), BASELINE_LIMIT)
 
 
 def generate_payloads(

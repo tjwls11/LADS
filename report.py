@@ -9,11 +9,9 @@ from fpdf import FPDF  # pyright: ignore[reportMissingModuleSource]
 
 
 VULN_LABELS = {
-    "xss":       "XSS",
-    "sqli":      "SQLi",
-    "sql":       "SQLi",
-    "bac":       "BAC",
-    "misconfig": "Misconfig",
+    "xss":  "XSS",
+    "sqli": "SQLi",
+    "sql":  "SQLi",
 }
 
 _SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2, "": 3}
@@ -39,30 +37,19 @@ def _clean(val) -> str:
 
 
 def _group_findings(findings: list[dict]) -> list[dict]:
-    """
-    payload 기반(XSS/SQLi/BAC): (module, category, url, param) 로 그룹핑
-    misconfig: 개별 유지
-    반환: 그룹 대표 dict + payload_count, payloads 필드 추가
-    """
     groups: dict[tuple, list[dict]] = defaultdict(list)
-    misc_items: list[dict] = []
 
     for f in findings:
-        mod = (f.get("module") or "").lower()
-        if mod == "misconfig":
-            misc_items.append(f)
-        else:
-            key = (
-                f.get("module", ""),
-                f.get("category", ""),
-                f.get("url", ""),
-                f.get("param", ""),
-            )
-            groups[key].append(f)
+        key = (
+            f.get("module", ""),
+            f.get("category", ""),
+            f.get("url", ""),
+            f.get("param", ""),
+        )
+        groups[key].append(f)
 
     result: list[dict] = []
 
-    # 그룹핑된 항목 — confidence 높은 것을 대표로
     for key, items in groups.items():
         items.sort(key=lambda x: _SEVERITY_ORDER.get((x.get("confidence") or "").lower(), 3))
         rep = dict(items[0])
@@ -70,17 +57,10 @@ def _group_findings(findings: list[dict]) -> list[dict]:
         rep["all_payloads"] = [_clean(i.get("payload", "")) for i in items if i.get("payload")]
         result.append(rep)
 
-    # 심각도 → 모듈 순 정렬
     result.sort(key=lambda x: (
         _SEVERITY_ORDER.get((x.get("confidence") or "").lower(), 3),
         x.get("module", ""),
     ))
-
-    # misconfig는 뒤에 붙임
-    for m in misc_items:
-        m["payload_count"] = 1
-        m["all_payloads"] = []
-        result.append(m)
 
     return result
 
@@ -104,10 +84,8 @@ def generate(run_id: str, run_dir: str) -> bytes:
         else:
             ts = run_id
 
-    xss_cnt       = sum(1 for f in findings if f.get("module") == "xss")
-    sqli_cnt      = sum(1 for f in findings if f.get("module") == "sqli")
-    bac_cnt       = sum(1 for f in findings if f.get("module") == "bac")
-    misconfig_cnt = sum(1 for f in findings if f.get("module") == "misconfig")
+    xss_cnt  = sum(1 for f in findings if f.get("module") == "xss")
+    sqli_cnt = sum(1 for f in findings if f.get("module") == "sqli")
 
     grouped = _group_findings(findings)
 
@@ -147,11 +125,9 @@ def generate(run_id: str, run_dir: str) -> bytes:
 
     # 요약 카드 (raw count)
     summary_items = [
-        ("Total Findings",   len(findings),    (9, 20, 38),      (238, 242, 247)),
-        ("XSS",              xss_cnt,           (180, 90, 0),     (255, 243, 224)),
-        ("SQLi",             sqli_cnt,          (186, 26, 26),    (255, 235, 235)),
-        ("BAC",              bac_cnt,           (90, 30, 160),    (243, 232, 255)),
-        ("Misconfig",        misconfig_cnt,     (20, 80, 180),    (224, 235, 255)),
+        ("Total Findings", len(findings), (9, 20, 38),   (238, 242, 247)),
+        ("XSS",            xss_cnt,       (180, 90, 0),  (255, 243, 224)),
+        ("SQLi",           sqli_cnt,      (186, 26, 26), (255, 235, 235)),
     ]
     cw = 38
     for label, val, tc, fc in summary_items:
@@ -174,12 +150,10 @@ def generate(run_id: str, run_dir: str) -> bytes:
 
     # 그룹 수 안내
     if findings:
-        vuln_groups = [g for g in grouped if g.get("module") != "misconfig"]
-        misc_groups = [g for g in grouped if g.get("module") == "misconfig"]
         pdf.set_font(FN, "", 10)
         pdf.set_text_color(100, 100, 100)
         pdf.cell(0, 6,
-            f"총 {len(findings)}개 탐지 결과 → {len(vuln_groups)}개 취약점 그룹 + {len(misc_groups)}개 설정 오류",
+            f"총 {len(findings)}개 탐지 결과 → {len(grouped)}개 취약점 그룹",
             new_x="LMARGIN", new_y="NEXT")
         pdf.ln(4)
 
@@ -257,7 +231,6 @@ def generate(run_id: str, run_dir: str) -> bytes:
             rows.append((label_payload, payload[:100] + ("..." if len(payload) > 100 else "")))
         rows.append(("Evidence", evidence[:110] + ("..." if len(evidence) > 110 else "")))
 
-        # misconfig version_disclosure: CVE 목록
         extra = f.get("extra") or {}
         cves = extra.get("cves") or []
 

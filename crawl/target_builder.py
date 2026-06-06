@@ -2,7 +2,7 @@ import json
 import re
 import sys
 import os
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urlparse, urljoin
 
 INPUT_FILE  = os.getenv("CRAWL_RESULT",  "results/crawl_result.json")
 OUTPUT_FILE = os.getenv("TARGETS_FILE",  "results/targets.json")
@@ -11,7 +11,7 @@ OUTPUT_FILE = os.getenv("TARGETS_FILE",  "results/targets.json")
 CSRF_RE = re.compile(r"(csrf|token|nonce|_token|authenticity|captcha)", re.IGNORECASE)
 
 # 인젝션 제외: 의미 없는 버튼/파일 타입
-SKIP_TYPES = {"submit", "button", "reset", "image", "file"}
+SKIP_TYPES = {"submit", "button", "reset", "image", "file", "checkbox", "radio"}
 
 BOOL_RE = re.compile(r"^(true|false|on|off|yes|no)$", re.IGNORECASE)
 NUMBER_RE = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
@@ -125,8 +125,13 @@ def build_targets(pages: list[dict]) -> list[dict]:
                     "params":        params,
                 })
 
-        # 2. HTML Form
+        # 2. HTML Form (form / JSON body)
         for form in page.get("forms", []):
+            enctype = form.get("enctype", "application/x-www-form-urlencoded")
+            # REQ-COMMON-001: application/json enctype → location을 json으로 구분
+            is_json_form = "json" in enctype.lower()
+            param_location = "json" if is_json_form else "form"
+
             params = []
             for f in form.get("fields", []):
                 field_type = f.get("field_type", "text")
@@ -141,12 +146,12 @@ def build_targets(pages: list[dict]) -> list[dict]:
                 shape = _value_shape(default_value, field_type, options)
                 params.append({
                     "name":          name,
-                    "location":      "form",
+                    "location":      param_location,
                     "method":        method,
                     "field_type":    field_type,
                     "default_value": default_value,
                     "value_shape":   shape,
-                    "group_key":     _group_key(name, "form", method, field_type, shape),
+                    "group_key":     _group_key(name, param_location, method, field_type, shape),
                     "options":       options,
                     "injectable":    _injectable(name, field_type),
                 })
@@ -154,7 +159,7 @@ def build_targets(pages: list[dict]) -> list[dict]:
             if not params:
                 continue
 
-            action = form.get("action", "")
+            action = urljoin(source, form.get("action", ""))
             method = form.get("method", "GET").upper()
             sig = _form_sig(action, method, [p["name"] for p in params])
             if sig not in seen:

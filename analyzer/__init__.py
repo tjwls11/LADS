@@ -1,20 +1,26 @@
 from __future__ import annotations
 
-from .sqli_analyzer import validate_sqli, detect_boolean_group, detect_orderby_group, detect_probe_group
+from .sqli_analyzer import (
+    validate_sqli,
+    detect_boolean_group,
+    detect_orderby_group,
+    detect_probe_group,
+    detect_timebased_group,
+)
 from .xss_analyzer  import validate_xss
-from .bac_analyzer  import detect_bac_group
 from utilities import load_json, save_json
-from findings import (
+from analyzer.findings import (
     make_finding,
-    MODULE_XSS, MODULE_SQLI, MODULE_BAC,
-    XSS_CONFIRMED, SQLI_CONFIRMED, BAC_SUSPECTED_MEDIUM,
-    HIGH,
+    MODULE_XSS, MODULE_SQLI,
+    XSS_CONFIRMED, SQLI_CONFIRMED,
+    HIGH, MEDIUM, LOW,
 )
 
 __all__ = [
     "run", "validate",
     "validate_sqli", "validate_xss",
-    "detect_boolean_group", "detect_orderby_group", "detect_probe_group", "detect_bac_group",
+    "detect_boolean_group", "detect_orderby_group",
+    "detect_probe_group", "detect_timebased_group",
 ]
 
 
@@ -27,8 +33,6 @@ def _derive_module_type(vt: str) -> tuple[str, str]:
         return MODULE_XSS, XSS_CONFIRMED
     if "sqli" in vt or "sql" in vt:
         return MODULE_SQLI, SQLI_CONFIRMED
-    if "bac" in vt or "broken_access" in vt or "auth" in vt:
-        return MODULE_BAC, BAC_SUSPECTED_MEDIUM
     return MODULE_XSS, XSS_CONFIRMED
 
 
@@ -36,20 +40,24 @@ def _derive_category(vt: str, evidence: str) -> str:
     ev = evidence.lower()
     if "time" in ev:
         return "time_based"
-    if "error" in ev or "db 에러" in ev:
+    if "error" in ev or "db 에러" in ev or "union" in ev:
         return "error_based"
     if "boolean" in ev:
         return "boolean"
+    if "order by" in ev or "orderby" in ev:
+        return "order_by"
+    if "probe" in ev:
+        return "boolean_probe"
     if any(x in vt for x in ("subject", "content", "comment")):
         return "stored"
-    if "search" in vt or "reflected" in vt:
+    if "search" in vt or "reflected" in vt or "xss" in vt:
         return "reflected"
     return "unknown"
 
 
-def _make_finding(r: dict, evidence: str) -> dict:
-    meta = r.get("meta") or {}
-    vt   = (meta.get("vuln_type") or "").lower()
+def _make_finding(r: dict, evidence: str, confidence: str = HIGH) -> dict:
+    meta     = r.get("meta") or {}
+    vt       = (meta.get("vuln_type") or "").lower()
     module, type_ = _derive_module_type(vt)
     category      = _derive_category(vt, evidence)
 
@@ -61,7 +69,7 @@ def _make_finding(r: dict, evidence: str) -> dict:
         param=r.get("inject_param"),
         payload=r.get("payload") or "",
         status=r.get("status"),
-        confidence=HIGH,
+        confidence=confidence,
         evidence=evidence,
     )
     f["id"]          = r.get("id")
@@ -72,53 +80,61 @@ def _make_finding(r: dict, evidence: str) -> dict:
     return f
 
 
-def _validate_single(r: dict) -> tuple[bool, str]:
+def _validate_single(r: dict) -> tuple[bool, str, str]:
+    """단건 검증. (found, evidence, confidence) 반환."""
     vt = _vuln_type(r)
     if "xss" in vt:
         return validate_xss(r)
     if "sqli" in vt or "sql" in vt:
         return validate_sqli(r)
-    if "bac" in vt or "broken_access" in vt or "auth" in vt:
-        return False, ""
 
-    ok, ev = validate_xss(r)
+    ok, ev, conf = validate_xss(r)
     if ok:
-        return True, ev
+        return True, ev, conf
     return validate_sqli(r)
 
 
-def validate(results: list[dict], progress_callback=None, login_url: str = "", home_url: str = "") -> list[dict]:
-    findings: list[dict] = []
-    found_ids: set = set()
+def validate(
+    results: list[dict],
+    progress_callback=None,
+) -> list[dict]:
+    findings:  list[dict] = []
+    found_ids: set        = set()
     total = len(results)
 
+    # ── Phase 1: 단건 검증 ────────────────────────────────────────
     for idx, r in enumerate(results):
         if progress_callback:
             progress_callback(idx + 1, total)
         if r.get("error") or not r.get("response_body"):
             continue
-        ok, evidence = _validate_single(r)
-        if ok:
-            findings.append(_make_finding(r, evidence))
+        ok, evidence, confidence = _validate_single(r)
+        if ok and evidence:
+            findings.append(_make_finding(r, evidence, confidence))
             found_ids.add(r.get("id"))
 
-    # Phase 2: 그룹 분석
+    # ── Phase 2: 그룹 분석 ────────────────────────────────────────
+
+    # REQ-SQLI-014~016: Time-based 그룹 (다중 재현 필요)
+    for item in detect_timebased_group(results):
+        r        = item["result"]
+        evidence = item["evidence"]
+        conf     = item.get("confidence", MEDIUM)
+        if r.get("id") in found_ids:
+            continue
+        findings.append(_make_finding(r, evidence, conf))
+        found_ids.add(r.get("id"))
+
+    # REQ-SQLI-007~010: Boolean / Probe / ORDER BY 그룹
     for detector in [detect_boolean_group, detect_probe_group, detect_orderby_group]:
         for item in detector(results):
             r        = item["result"]
             evidence = item["evidence"]
+            conf     = item.get("confidence", MEDIUM)
             if r.get("id") in found_ids:
                 continue
-            findings.append(_make_finding(r, evidence))
+            findings.append(_make_finding(r, evidence, conf))
             found_ids.add(r.get("id"))
-
-    for item in detect_bac_group(results, login_url=login_url, home_url=home_url):
-        r        = item["result"]
-        evidence = item["evidence"]
-        if r.get("id") in found_ids:
-            continue
-        findings.append(_make_finding(r, evidence))
-        found_ids.add(r.get("id"))
 
     return findings
 
@@ -128,10 +144,7 @@ def run(
     output_file: str = "results/findings.json",
     progress_callback=None,
 ) -> list[dict]:
-    results = load_json(input_file, [])
-
+    results  = load_json(input_file, [])
     findings = validate(results, progress_callback=progress_callback)
-
     save_json(output_file, findings)
-
     return findings

@@ -1,19 +1,23 @@
+#analyzer/sqli_analyzer.py
 from __future__ import annotations
 
 import re
 from collections import defaultdict
 from typing import Optional
+from .findings import HIGH, MEDIUM, LOW
 
-SLEEP_THRESHOLD       = 4.5
-BOOL_SIGNAL_MIN       = 0.05
-BOOL_GROUP_THRESHOLD  = 0.05
-ORDERBY_DIFF_THRES    = 0.10
+SLEEP_THRESHOLD      = 4.5
+BOOL_GROUP_THRESHOLD = 0.05   # 5% 이상 응답 크기 차이
+ORDERBY_DIFF_THRES   = 0.10   # 10% 이상 응답 크기 차이
+TIME_CONFIRM_COUNT   = 2      # REQ-SQLI-015: 최소 2회 재검증
 
+# REQ-SQLI-011/012: UNION 오류 패턴
 UNION_ERROR_KEYWORDS = (
     "the used select statements have a different number",
     "column count doesn't match",
 )
 
+# REQ-SQLI-005/006: MySQL 및 공통 DBMS 에러 패턴
 DB_ERROR_KEYWORDS = (
     "you have an error in your sql syntax",
     "warning: mysql",
@@ -25,8 +29,19 @@ DB_ERROR_KEYWORDS = (
     "division by zero",
     "unknown column",
     "table 'g5_",
+    # REQ-SQLI-006: 필수 MySQL 에러 패턴
+    "mysql_fetch",
+    "mysqli_",
+    "mariadb server version",
+    "sql syntax",
+    "mysql error",
+    "mysql_num_rows",
+    "mysql_query",
+    "com.mysql.jdbc.exceptions",
+    "org.gjt.mm.mysql",
 )
 
+# Boolean TRUE payload 패턴
 _BOOL_TRUE = re.compile(
     r"1\s*=\s*1"
     r"|'\s*([a-z0-9])\s*'\s*=\s*'\s*\1"
@@ -38,6 +53,8 @@ _BOOL_TRUE = re.compile(
     r"|case\s+when\s*\(\s*1\s*=\s*1",
     re.IGNORECASE,
 )
+
+# Boolean FALSE payload 패턴
 _BOOL_FALSE = re.compile(
     r"1\s*=\s*2"
     r"|1\s*=\s*0"
@@ -48,6 +65,7 @@ _BOOL_FALSE = re.compile(
     re.IGNORECASE,
 )
 
+# ASCII/SUBSTR/REGEXP 등 정찰 payload 패턴
 _BOOL_PROBE = re.compile(
     r"ascii\(.+\)\s*[=><]"
     r"|(?:substr|substring|mid)\([^)]+\)\s*[=><]"
@@ -57,21 +75,33 @@ _BOOL_PROBE = re.compile(
 )
 
 _ORDERBY_INJECT = re.compile(r"order\s+by\s+(?:\d+|\(|\w+\s*,)", re.IGNORECASE)
-_ORDERBY_NUM = re.compile(r"order\s+by\s+(\d+)", re.IGNORECASE)
+_SLEEP_RE       = re.compile(
+    r"sleep\s*\(|benchmark\s*\(|pg_sleep\s*\(|waitfor\s+delay",
+    re.IGNORECASE,
+)
+
+
+# ─── 헬퍼 ────────────────────────────────────────────────────────
+
+def _is_baseline_result(r: dict) -> bool:
+    """REQ-SQLI-014: baseline(안전한 원본값) 요청인지 확인."""
+    meta = r.get("meta") or {}
+    return meta.get("is_baseline", False) or meta.get("type") == "BASELINE"
+
+
+def _is_time_based_payload(payload: str) -> bool:
+    return bool(_SLEEP_RE.search(payload or ""))
 
 
 def _is_group_candidate(payload: str) -> bool:
     if not payload:
         return False
-    if _BOOL_TRUE.search(payload):
-        return True
-    if _BOOL_FALSE.search(payload):
-        return True
-    if _BOOL_PROBE.search(payload):
-        return True
-    if _ORDERBY_INJECT.search(payload):
-        return True
-    return False
+    return bool(
+        _BOOL_TRUE.search(payload)
+        or _BOOL_FALSE.search(payload)
+        or _BOOL_PROBE.search(payload)
+        or _ORDERBY_INJECT.search(payload)
+    )
 
 
 def _extract_response(test_result: dict) -> dict:
@@ -97,66 +127,161 @@ def _vuln_type(r: dict) -> str:
 
 
 def _body_length(r: dict) -> int:
-    return r.get("content_length") or 0
+    if r.get("content_length") is not None:
+        return int(r.get("content_length") or 0)
+    if isinstance(r.get("response"), dict):
+        return int(r["response"].get("length") or 0)
+    body = r.get("response_body") or ""
+    return len(body)
 
 
 def _has_db_error(body: str) -> bool:
     if not body:
         return False
-    return any(sig in body for sig in DB_ERROR_KEYWORDS)
-
-
-def _check_time_based(elapsed: float) -> Optional[str]:
-    if elapsed >= SLEEP_THRESHOLD:
-        return f"Time-based SQLi (응답 지연 {elapsed:.2f}s >= {SLEEP_THRESHOLD}s)"
-    return None
+    bl = body.lower()
+    return any(sig in bl for sig in DB_ERROR_KEYWORDS)
 
 
 def _check_error_based(body: str) -> Optional[str]:
+    bl = body.lower()
     for sig in UNION_ERROR_KEYWORDS:
-        if sig in body:
+        if sig in bl:
             return f"UNION-based SQLi (컬럼 수 mismatch: '{sig[:50]}')"
     for sig in DB_ERROR_KEYWORDS:
-        if sig in body:
+        if sig in bl:
             return f"Error-based SQLi (DB 에러 노출: '{sig}')"
     return None
 
 
-def validate_sqli(test_result: dict) -> tuple[bool, str]:
+# ─── Phase 1: 단건 검증 ──────────────────────────────────────────
+
+def validate_sqli(test_result: dict) -> tuple[bool, str, str]:
+    """
+    단건 결과 검증. (found, evidence, confidence) 반환.
+
+    REQ-SQLI-016: Time-based 단건 → Phase 2 그룹 분석으로 위임
+    REQ-SQLI-018: 단건 DB 에러 → medium
+    REQ-SQLI-017/020: confirmed/high는 비교군이 있을 때만
+    """
     if not test_result:
-        return False, "검증 불가 (입력 없음)"
+        return False, "검증 불가 (입력 없음)", ""
 
     resp = _extract_response(test_result)
     if not resp["body"] and resp["elapsed"] == 0.0:
-        return False, "검증 불가 (응답 데이터 누락)"
-
-    msg = _check_time_based(resp["elapsed"])
-    if msg:
-        return True, msg
+        return False, "검증 불가 (응답 데이터 누락)", ""
 
     payload = test_result.get("payload") or ""
-    if _is_group_candidate(payload):
-        return False, "그룹 분석 대상 (Phase 2로 위임)"
 
+    # REQ-SQLI-016: time-based 단건은 confirmed 금지 → Phase 2로 위임
+    if resp["elapsed"] >= SLEEP_THRESHOLD and _is_time_based_payload(payload):
+        return False, "time_candidate", ""
+
+    # boolean/probe/orderby → Phase 2 그룹 분석
+    if _is_group_candidate(payload):
+        return False, "그룹 분석 대상 (Phase 2로 위임)", ""
+
+    # REQ-SQLI-018: 단건 DB 에러 → medium
     msg = _check_error_based(resp["body"])
     if msg:
-        return True, msg
+        return True, msg, MEDIUM
 
-    return False, "안전함 (SQLi 시그니처 미검출)"
+    return False, "안전함 (SQLi 시그니처 미검출)", ""
+
+
+# ─── Phase 2: 그룹 분석 ──────────────────────────────────────────
+
+def detect_timebased_group(results: list[dict]) -> list[dict]:
+    """
+    REQ-SQLI-014 to REQ-SQLI-016:
+    - baseline 응답 시간 먼저 측정
+    - 2회 이상 재검증해야 confirmed/high
+    - 단건 지연 → medium/suspected
+    """
+    sqli_results = [
+        r for r in results
+        if not r.get("error")
+        and not _is_baseline_result(r)
+        and ("sqli" in _vuln_type(r) or "sql" in _vuln_type(r))
+    ]
+
+    time_results = [
+        r for r in sqli_results
+        if float(r.get("elapsed") or 0) >= SLEEP_THRESHOLD
+        and _is_time_based_payload(r.get("payload") or "")
+    ]
+
+    if not time_results:
+        return []
+
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for r in time_results:
+        key = (r.get("url"), r.get("inject_param"))
+        groups[key].append(r)
+
+    # baseline 결과 수집 (같은 url+param의 안전 응답)
+    baseline_by_key: dict[tuple, list[dict]] = defaultdict(list)
+    for r in results:
+        if _is_baseline_result(r) and ("sqli" in _vuln_type(r) or "sql" in _vuln_type(r)):
+            key = (r.get("url"), r.get("inject_param"))
+            baseline_by_key[key].append(r)
+
+    detected: list[dict] = []
+
+    for key, group in groups.items():
+        baseline = baseline_by_key.get(key, [])
+        avg_baseline = (
+            sum(float(r.get("elapsed") or 0) for r in baseline) / len(baseline)
+            if baseline else None
+        )
+        avg_elapsed = sum(float(r.get("elapsed") or 0) for r in group) / len(group)
+
+        # REQ-SQLI-015: 2회 이상 → confirmed/high
+        if len(group) >= TIME_CONFIRM_COUNT:
+            if avg_baseline is not None:
+                evidence = (
+                    f"Time-based SQLi (confirmed): {len(group)}회 지연 응답 재현 "
+                    f"(평균 {avg_elapsed:.2f}s vs baseline {avg_baseline:.2f}s)"
+                )
+            else:
+                evidence = (
+                    f"Time-based SQLi (confirmed): {len(group)}회 지연 응답 재현 "
+                    f"(평균 {avg_elapsed:.2f}s >= {SLEEP_THRESHOLD}s)"
+                )
+            best = max(group, key=lambda r: float(r.get("elapsed") or 0))
+            detected.append({"result": best, "evidence": evidence, "confidence": HIGH})
+        else:
+            r0 = group[0]
+            elapsed = float(r0.get("elapsed") or 0)
+            # REQ-SQLI-016: 단건 → medium/low (confirmed 불가)
+            if avg_baseline is not None and avg_baseline < 1.5:
+                evidence = (
+                    f"Time-based SQLi (suspected): 단일 지연 응답 ({elapsed:.2f}s, "
+                    f"baseline {avg_baseline:.2f}s) — 재검증 필요 (REQ-SQLI-015)"
+                )
+                detected.append({"result": r0, "evidence": evidence, "confidence": MEDIUM})
+            else:
+                evidence = (
+                    f"Time-based SQLi (candidate): 단일 지연 응답 ({elapsed:.2f}s) — "
+                    f"baseline 미확인, 재검증 필요"
+                )
+                detected.append({"result": r0, "evidence": evidence, "confidence": LOW})
+
+    return detected
 
 
 def detect_boolean_group(results: list[dict]) -> list[dict]:
     """
-    판정 단계:
-      [confirmed] TRUE+FALSE 짝 있고 응답 차이 >= 5%
-      [suspected] TRUE+FALSE 짝 있고 응답 동일 + DB 에러 시그니처 동반
-      [candidate] TRUE+FALSE 짝 있지만 응답 동일, DB 에러 없음
-      [candidate] TRUE 또는 FALSE 한쪽만 있음
+    REQ-SQLI-007 to REQ-SQLI-010:
+    - REQ-SQLI-007: TRUE+FALSE 쌍 필수
+    - REQ-SQLI-008: TRUE 응답 ≈ baseline (safe 응답)
+    - REQ-SQLI-009: FALSE 응답 ≠ TRUE 응답 (≥5% 차이)
+    - REQ-SQLI-010/020: 비교군 없으면 confirmed/high 금지
     """
     sqli_results = [
         r for r in results
         if not r.get("error")
         and r.get("response_body")
+        and not _is_baseline_result(r)
         and ("sqli" in _vuln_type(r) or "sql" in _vuln_type(r))
     ]
 
@@ -165,74 +290,98 @@ def detect_boolean_group(results: list[dict]) -> list[dict]:
         key = (r.get("url"), r.get("inject_param"))
         groups[key].append(r)
 
+    # baseline 수집 (REQ-SQLI-008 비교용)
+    baseline_by_key: dict[tuple, list[dict]] = defaultdict(list)
+    for r in results:
+        if _is_baseline_result(r):
+            key = (r.get("url"), r.get("inject_param"))
+            baseline_by_key[key].append(r)
+
     detected: list[dict] = []
 
-    for _key, group in groups.items():
-        true_items, false_items = [], []
-        for r in group:
-            payload = r.get("payload") or ""
-            if _BOOL_TRUE.search(payload):
-                true_items.append(r)
-            if _BOOL_FALSE.search(payload):
-                false_items.append(r)
+    for key, group in groups.items():
+        true_items  = [r for r in group if _BOOL_TRUE.search(r.get("payload") or "")]
+        false_items = [r for r in group if _BOOL_FALSE.search(r.get("payload") or "")]
+        baseline    = baseline_by_key.get(key, [])
 
-        if true_items and false_items:
-            avg_true  = sum(_body_length(r) for r in true_items)  / len(true_items)
-            avg_false = sum(_body_length(r) for r in false_items) / len(false_items)
-            max_len   = max(avg_true, avg_false, 1)
-            diff      = abs(avg_true - avg_false) / max_len
-
-            if diff >= BOOL_GROUP_THRESHOLD:
-                direction = "true>false" if avg_true > avg_false else "true<false"
-                evidence = (
-                    f"Boolean-based SQLi (confirmed): "
-                    f"true_len={avg_true:.0f}, false_len={avg_false:.0f}, "
-                    f"diff={diff:.1%} ({direction})"
-                )
-                best = max(true_items, key=_body_length)
-                detected.append({"result": best, "evidence": evidence})
+        # REQ-SQLI-010: TRUE+FALSE 쌍 없으면 confirmed 불가
+        if not (true_items and false_items):
+            candidate_items = true_items or false_items
+            if not candidate_items:
                 continue
-
-            sample_body = (true_items[0].get("response_body") or "").lower()
-            if _has_db_error(sample_body):
-                evidence = (
-                    f"Boolean-based SQLi (suspected): "
-                    f"true {len(true_items)}개 / false {len(false_items)}개 시도, "
-                    f"응답 크기 동일 (diff={diff:.1%}) + DB 에러 시그니처 동반 → "
-                    f"CMS 동일 에러 페이지 환경 (그누보드 등)"
-                )
-            else:
-                evidence = (
-                    f"Boolean SQLi candidate: "
-                    f"true {len(true_items)}개 / false {len(false_items)}개 시도, "
-                    f"응답 동일 (diff={diff:.1%}), 수동 확인 필요"
-                )
-            best = true_items[0]
-            detected.append({"result": best, "evidence": evidence})
-            continue
-
-        candidate_items = true_items or false_items
-        if candidate_items:
             kind = "TRUE" if true_items else "FALSE"
             sample_body = (candidate_items[0].get("response_body") or "").lower()
             error_note = " + DB 에러 동반" if _has_db_error(sample_body) else ""
             evidence = (
                 f"Boolean SQLi candidate ({kind} only): "
-                f"{len(candidate_items)}개 페이로드 시도, "
-                f"짝 페이로드 부재로 응답 비교 불가{error_note}"
+                f"{len(candidate_items)}개 페이로드, "
+                f"짝 페이로드 없어 응답 비교 불가{error_note} — REQ-SQLI-010"
             )
-            best = candidate_items[0]
-            detected.append({"result": best, "evidence": evidence})
+            detected.append({"result": candidate_items[0], "evidence": evidence, "confidence": LOW})
+            continue
+
+        avg_true  = sum(_body_length(r) for r in true_items)  / len(true_items)
+        avg_false = sum(_body_length(r) for r in false_items) / len(false_items)
+        max_len   = max(avg_true, avg_false, 1)
+        diff      = abs(avg_true - avg_false) / max_len
+
+        # REQ-SQLI-009: FALSE ≠ TRUE (≥5% 차이)
+        if diff < BOOL_GROUP_THRESHOLD:
+            sample_body = (true_items[0].get("response_body") or "").lower()
+            db_note = " + DB 에러 동반" if _has_db_error(sample_body) else ""
+            evidence = (
+                f"Boolean SQLi candidate: true {len(true_items)}개/false {len(false_items)}개, "
+                f"응답 크기 차이 미미 (diff={diff:.1%}){db_note} — REQ-SQLI-009 미충족"
+            )
+            detected.append({"result": true_items[0], "evidence": evidence, "confidence": LOW})
+            continue
+
+        direction = "true>false" if avg_true > avg_false else "true<false"
+
+        # REQ-SQLI-008: TRUE ≈ baseline 비교
+        if baseline:
+            avg_baseline = sum(_body_length(r) for r in baseline) / len(baseline)
+            baseline_diff = abs(avg_true - avg_baseline) / max(avg_true, avg_baseline, 1)
+
+            if baseline_diff > 0.20:
+                # TRUE가 baseline과 너무 다름 → suspected
+                evidence = (
+                    f"Boolean-based SQLi (suspected): "
+                    f"true={avg_true:.0f}b, false={avg_false:.0f}b, diff={diff:.1%} ({direction}), "
+                    f"baseline={avg_baseline:.0f}b — true vs baseline 차이 {baseline_diff:.1%} "
+                    f"(REQ-SQLI-008 미충족)"
+                )
+                best = max(true_items, key=_body_length)
+                detected.append({"result": best, "evidence": evidence, "confidence": MEDIUM})
+            else:
+                # REQ-SQLI-007 ✅ REQ-SQLI-008 ✅ REQ-SQLI-009 ✅ → confirmed
+                evidence = (
+                    f"Boolean-based SQLi (confirmed): "
+                    f"true={avg_true:.0f}b ≈ baseline={avg_baseline:.0f}b, "
+                    f"false={avg_false:.0f}b, diff={diff:.1%} ({direction})"
+                )
+                best = max(true_items, key=_body_length)
+                detected.append({"result": best, "evidence": evidence, "confidence": HIGH})
+        else:
+            # baseline 없음 → REQ-SQLI-008 미충족, medium만 가능
+            evidence = (
+                f"Boolean-based SQLi (suspected): "
+                f"true={avg_true:.0f}b, false={avg_false:.0f}b, diff={diff:.1%} ({direction}) "
+                f"— baseline 없음 (REQ-SQLI-008 미충족)"
+            )
+            best = max(true_items, key=_body_length)
+            detected.append({"result": best, "evidence": evidence, "confidence": MEDIUM})
 
     return detected
 
 
 def detect_probe_group(results: list[dict]) -> list[dict]:
-    """ASCII/SUBSTRING/MID/REGEXP/LENGTH=N 등 정찰 페이로드 전용."""
+    """ASCII/SUBSTRING/MID/REGEXP/LENGTH=N 정찰 페이로드 그룹 탐지."""
     probe_results = [
         r for r in results
         if not r.get("error")
         and r.get("response_body")
+        and not _is_baseline_result(r)
         and ("sqli" in _vuln_type(r) or "sql" in _vuln_type(r))
         and _BOOL_PROBE.search(r.get("payload") or "")
     ]
@@ -252,39 +401,49 @@ def detect_probe_group(results: list[dict]) -> list[dict]:
         if not lengths:
             continue
 
-        min_len, max_len_v = min(lengths), max(lengths)
-        diff = (max_len_v - min_len) / max(max_len_v, 1)
-
+        min_len    = min(lengths)
+        max_len_v  = max(lengths)
+        diff       = (max_len_v - min_len) / max(max_len_v, 1)
         sample_body = (group[0].get("response_body") or "").lower()
-        has_error = _has_db_error(sample_body)
+        has_error   = _has_db_error(sample_body)
 
         if diff >= BOOL_GROUP_THRESHOLD and len(group) >= 2:
-            evidence = (
+            evidence   = (
                 f"Boolean Probe SQLi (confirmed): {len(group)}개 정찰 페이로드 응답 분산 "
                 f"(min={min_len}b, max={max_len_v}b, diff={diff:.1%})"
             )
+            confidence = MEDIUM
         elif has_error:
-            evidence = (
-                f"Boolean Probe SQLi (suspected): {len(group)}개 정찰 페이로드 시도, "
-                f"응답 동일하지만 DB 에러 시그니처 동반"
+            evidence   = (
+                f"Boolean Probe SQLi (suspected): {len(group)}개 정찰 페이로드, "
+                f"응답 동일하지만 DB 에러 동반"
             )
+            confidence = MEDIUM
         else:
-            evidence = (
-                f"Boolean Probe SQLi candidate: {len(group)}개 정찰 페이로드 시도 "
-                f"(ASCII/SUBSTRING/MID/REGEXP 등), 응답 차이 없음"
+            evidence   = (
+                f"Boolean Probe SQLi candidate: {len(group)}개 정찰 페이로드 "
+                f"(ASCII/SUBSTRING/MID/REGEXP), 응답 차이 없음"
             )
+            confidence = LOW
 
         best = max(group, key=_body_length)
-        detected.append({"result": best, "evidence": evidence})
+        detected.append({"result": best, "evidence": evidence, "confidence": confidence})
 
     return detected
 
 
 def detect_orderby_group(results: list[dict]) -> list[dict]:
+    """
+    REQ-SQLI-011 to REQ-SQLI-013:
+    - REQ-SQLI-011: 정상 index + 비정상 index 쌍 비교 필수
+    - REQ-SQLI-012: 정상 ORDER BY ≈ baseline
+    - REQ-SQLI-013: 비정상 ORDER BY → SQL 에러 또는 응답 차이
+    """
     orderby_results = [
         r for r in results
         if not r.get("error")
         and r.get("response_body")
+        and not _is_baseline_result(r)
         and _ORDERBY_INJECT.search(r.get("payload") or "")
     ]
 
@@ -296,22 +455,49 @@ def detect_orderby_group(results: list[dict]) -> list[dict]:
         key = (r.get("url"), r.get("inject_param"))
         groups[key].append(r)
 
+    baseline_by_key: dict[tuple, list[dict]] = defaultdict(list)
+    for r in results:
+        if _is_baseline_result(r):
+            key = (r.get("url"), r.get("inject_param"))
+            baseline_by_key[key].append(r)
+
     detected: list[dict] = []
 
-    for _key, group in groups.items():
+    for key, group in groups.items():
+        baseline = baseline_by_key.get(key, [])
+
+        # REQ-SQLI-011: 쌍 비교를 위해 최소 2개 필요
         if len(group) < 2:
-            if group:
-                sample_body = (group[0].get("response_body") or "").lower()
-                error_note = " + DB 에러 동반" if _has_db_error(sample_body) else ""
+            sample_body = (group[0].get("response_body") or "").lower()
+            error_note = " + DB 에러 동반" if _has_db_error(sample_body) else ""
+
+            if baseline:
+                avg_baseline = sum(_body_length(r) for r in baseline) / len(baseline)
+                single_len = _body_length(group[0])
+                diff = abs(single_len - avg_baseline) / max(single_len, avg_baseline, 1)
+                if diff >= ORDERBY_DIFF_THRES:
+                    evidence = (
+                        f"ORDER BY SQLi (suspected): 단일 페이로드 vs baseline 차이 "
+                        f"({single_len}b vs {avg_baseline:.0f}b, diff={diff:.1%}){error_note}"
+                    )
+                    detected.append({"result": group[0], "evidence": evidence, "confidence": MEDIUM})
+                else:
+                    evidence = (
+                        f"ORDER BY SQLi candidate: 단일 페이로드, baseline 차이 미미 "
+                        f"(diff={diff:.1%}){error_note}"
+                    )
+                    detected.append({"result": group[0], "evidence": evidence, "confidence": LOW})
+            else:
                 evidence = (
-                    f"ORDER BY SQLi candidate: 단일 페이로드 시도, "
-                    f"비교용 baseline 부족{error_note}"
+                    f"ORDER BY SQLi candidate: 단일 페이로드, "
+                    f"비교용 쌍 없음{error_note} — REQ-SQLI-011 미충족"
                 )
-                detected.append({"result": group[0], "evidence": evidence})
+                detected.append({"result": group[0], "evidence": evidence, "confidence": LOW})
             continue
 
-        lengths = [_body_length(r) for r in group]
-        min_len, max_len_v = min(lengths), max(lengths)
+        lengths  = [_body_length(r) for r in group]
+        min_len  = min(lengths)
+        max_len_v = max(lengths)
         if max_len_v == 0:
             continue
 
@@ -322,22 +508,22 @@ def detect_orderby_group(results: list[dict]) -> list[dict]:
             for r in group
         )
 
+        # REQ-SQLI-012/013: 쌍 비교에서 차이 or 에러 → confirmed
         if diff >= ORDERBY_DIFF_THRES or has_error:
-            evidence_extra = " + 'unknown column' 에러" if has_error else ""
+            extra = " + 'unknown column' 에러" if has_error else ""
             evidence = (
                 f"ORDER BY SQLi (confirmed): {len(group)}개 페이로드 응답 분산 "
-                f"(min={min_len}b, max={max_len_v}b, diff={diff:.1%}){evidence_extra}"
+                f"(min={min_len}b, max={max_len_v}b, diff={diff:.1%}){extra}"
             )
             best = max(group, key=_body_length)
-            detected.append({"result": best, "evidence": evidence})
+            detected.append({"result": best, "evidence": evidence, "confidence": HIGH})
         else:
             sample_body = (group[0].get("response_body") or "").lower()
             db_note = " + DB 에러 동반" if _has_db_error(sample_body) else ""
             evidence = (
-                f"ORDER BY SQLi candidate: {len(group)}개 페이로드 시도, "
+                f"ORDER BY SQLi candidate: {len(group)}개 페이로드, "
                 f"응답 동일 (diff={diff:.1%}){db_note}"
             )
-            best = group[0]
-            detected.append({"result": best, "evidence": evidence})
+            detected.append({"result": group[0], "evidence": evidence, "confidence": LOW})
 
     return detected
