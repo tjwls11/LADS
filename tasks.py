@@ -13,6 +13,7 @@ from analyzer import validate as analyze_results
 from findings import load_findings, save_findings, append_findings
 from bac.vertical import run_vertical_probe
 from misconfig.runner import build_misconfig_results
+from misconfig.proxy_runner import ProxyRunner
 from utilities import ensure_parent_dir, load_json, save_json
 
 TASK_LABELS = {
@@ -89,11 +90,24 @@ def _task_bac_crawl(run_path_fn, target_url, emit_progress=None):
     n_roles = max(len(role_sessions), 1)
     prog_per_role = 18 // n_roles
 
+    _prog(emit_progress, 1)  # 프록시 시작 중 표시
+    proxy = ProxyRunner(target_url=target_url)
+    try:
+        proxy.start()
+        print("[PROXY] 패시브 분석 활성화")
+    except Exception as e:
+        print(f"[PROXY] 시작 실패, 프록시 없이 진행: {e}")
+        proxy = None
+
     for i, (role, cookies) in enumerate(role_sessions.items()):
         if role == "member2":
             continue
         print(f"[BAC CRAWL] [{role}] start: {target_url}")
         crawler = Crawler(target_url, init_cookies=cookies)
+
+        if proxy:
+            crawler.session.proxies = proxy.proxies
+            crawler.session.verify  = False
 
         base = i * prog_per_role
         def _crawl_progress(done, total, _base=base):
@@ -103,6 +117,11 @@ def _task_bac_crawl(run_path_fn, target_url, emit_progress=None):
         crawler.summary()
         role_pages[role] = [asdict(r) for r in crawler.results]
         print(f"[BAC CRAWL] [{role}] pages={len(crawler.results)}")
+
+    passive_findings = list(proxy.findings) if proxy else []
+    if proxy:
+        proxy.stop()
+    print(f"[PROXY] 패시브 findings: {len(passive_findings)}개")
 
     _prog(emit_progress, 18)
 
@@ -116,6 +135,8 @@ def _task_bac_crawl(run_path_fn, target_url, emit_progress=None):
     targets = build_targets(merged_pages)
     save_json(targets_file, targets)
     print(f"[BAC CRAWL] 타겟 저장됨: {targets_file} ({len(targets)}개)")
+
+    return passive_findings
 
 
 def _task_bac_vertical(run_path_fn, target_url=None, emit_progress=None):
@@ -155,9 +176,9 @@ def _task_bac_vertical(run_path_fn, target_url=None, emit_progress=None):
 
 
 def _task_bac_stream(run_path_fn, target_url=None, emit_progress=None):
-    # 1. BAC 전용 크롤링 (3세션: guest + member1 + admin)
-    _task_bac_crawl(run_path_fn, target_url,
-                    emit_progress=lambda pct: _prog(emit_progress, int(pct * 20 / 20)))
+    # 1. BAC 전용 크롤링 (3세션: guest + member1 + admin) + 프록시 패시브 분석
+    passive_findings = _task_bac_crawl(run_path_fn, target_url,
+                    emit_progress=lambda pct: _prog(emit_progress, int(pct * 20 / 20))) or []
 
     # 2. 수직 권한 상승 프로브 (크롤 시 이미 쿠키 갱신됨, 재로그인 불필요)
     _task_bac_vertical(run_path_fn, target_url=None,
@@ -177,22 +198,38 @@ def _task_bac_stream(run_path_fn, target_url=None, emit_progress=None):
 
     _prog(emit_progress, 80)
 
-    # 3. 설정 오류 점검 (misconfig) — bac_findings.json 에 append
+    # 3. 설정 오류 점검 (misconfig) — 패시브(프록시) + 능동 탐침 → 중복 제거 후 저장
     if target_url:
-        print(f"[MISCONFIG] 설정 오류 점검 시작: {target_url}")
+        all_misconfig: list[dict] = list(passive_findings)
+
+        print(f"[MISCONFIG] 능동 탐침 시작: {target_url}")
         try:
-            misconfig_findings = build_misconfig_results(
+            active_findings = build_misconfig_results(
                 base_url=target_url,
                 progress_callback=lambda done, total: _prog(
                     emit_progress, 80 + int(done / max(total, 1) * 18)
                 ),
             )
-            append_findings(misconfig_findings, bac_findings_file)
-            confirmed = sum(1 for f in misconfig_findings if f.get("type") == "MISCONFIG_CONFIRMED")
-            warnings  = sum(1 for f in misconfig_findings if f.get("type") == "MISCONFIG_WARNING")
-            print(f"[MISCONFIG] confirmed={confirmed}, warning={warnings}")
+            all_misconfig.extend(active_findings)
         except Exception as e:
             print(f"[MISCONFIG] 오류: {e}")
+
+        # (category + evidence) 기준 중복 제거
+        seen_keys: set[str] = set()
+        deduped: list[dict] = []
+        for f in all_misconfig:
+            key = f"{f.get('category')}|{f.get('evidence','')[:80]}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                deduped.append(f)
+
+        removed = len(all_misconfig) - len(deduped)
+        print(f"[MISCONFIG] 중복 제거: {removed}개 제거 → {len(deduped)}개 저장")
+        if deduped:
+            append_findings(deduped, bac_findings_file)
+        confirmed = sum(1 for f in deduped if f.get("type") == "MISCONFIG_CONFIRMED")
+        warnings  = sum(1 for f in deduped if f.get("type") == "MISCONFIG_WARNING")
+        print(f"[MISCONFIG] confirmed={confirmed}, warning={warnings}")
 
     _prog(emit_progress, 100)
 

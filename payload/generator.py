@@ -21,7 +21,6 @@ load_dotenv()
 COUNT = 3
 BASELINE_LIMIT = 4
 
-
 #타입별 round-robin 샘플링 — 단순 슬라이싱으로 생기는 단일 타입 편중 방지
 def _sample_diverse(payloads: list[dict], limit: int) -> list[dict]:
     by_type: dict[str, list[dict]] = defaultdict(list)

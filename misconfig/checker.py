@@ -780,7 +780,7 @@ def check(base_url: str, progress_callback=None) -> list[dict]:
     base_url = normalize_base_url(base_url)
     findings: list[dict] = []
 
-    total = len(_SENSITIVE_FILES) + len(_DIRECTORY_PATHS) + 6  # +6: headers, error, cookies, cors, admin, robots
+    total = len(_SENSITIVE_FILES) + len(_DIRECTORY_PATHS) + 6
     done = 0
 
     def _tick():
