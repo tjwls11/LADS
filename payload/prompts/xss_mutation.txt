@@ -1,9 +1,0 @@
-XSS mutation guidance:
-- Preserve XSS intent from the baseline payload.
-- Adapt payloads to the parameter shape shown in the structural context.
-- For text/search inputs, prefer short reflected-XSS-friendly variants.
-- For textarea/content-like inputs, stored-XSS-style HTML payloads are acceptable.
-- For URL/path-like values, consider javascript:, data:, or attribute-breakout variants only when consistent with the baseline intent.
-- For enum/select-like values, preserve or prefix a plausible option value when useful.
-- For form-urlencoded or query contexts, URL encoding may be used when it improves survivability.
-- Do not switch to unrelated vulnerability classes.

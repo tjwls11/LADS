@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 from urllib.parse import urlparse
-from payload.baseline.xss import get_by_context as xss_get_by_context
-from payload.baseline.sqli import get_by_sql_context
+from baseline.xss import get_by_context as xss_get_by_context
+from baseline.sqli import get_by_sql_context
 
 _DESTRUCTIVE_SQL_RE = re.compile(
     r"\b(drop|delete|update|insert|alter|truncate|create|replace|rename|grant|revoke)\b",
@@ -89,68 +88,36 @@ def _infer_types(
             return ["sqli_login"]
     if field_type == "password":
         return ["sqli_login"]
-    if field_type == "number" or _is_numeric_value(default_value):
+    if field_type == "number":
         return ["sqli_numeric"]
-    if field_type in ("text", "input", "email"):
-        return ["sqli_string", "xss_search"]
-    if field_type == "url_param":
-        return ["sqli_string"]
     if field_type == "textarea":
         return ["xss_content"]
     if field_type == "select":
         return ["sqli_field"]
-    if field_type == "hidden":
+
+    is_numeric = _is_numeric_value(default_value)
+
+    if field_type in ("text", "input", "email", "search"):
+        # numeric 값이라도 text 필드는 string 우선; numeric probe를 추가로 포함
+        if is_numeric:
+            return ["sqli_numeric", "sqli_string", "xss_search"]
+        return ["sqli_string", "xss_search"]
+
+    if field_type in ("url_param", "hidden"):
+        # 숫자 값이고 위치가 query → numeric + string minimal pair
+        if is_numeric:
+            return ["sqli_numeric", "sqli_string"]
         return ["sqli_string"]
+
+    # fallback
+    if is_numeric:
+        return ["sqli_numeric", "sqli_string"]
     return ["sqli_string"]
 
 
-def _flatten_by_type(payloads: dict) -> dict[str, list]:
-    result: dict[str, list] = {}
-    seen:   dict[str, set]  = {}
-    for point_data in payloads.values():
-        if not isinstance(point_data, dict):
-            continue
-        for vtype, records in point_data.items():
-            if not isinstance(records, list):
-                continue
-            result.setdefault(vtype, [])
-            seen.setdefault(vtype, set())
-            for r in records:
-                if not isinstance(r, dict):
-                    continue
-                payload = r.get("payload")
-                if payload and payload not in seen[vtype]:
-                    seen[vtype].add(payload)
-                    result[vtype].append(r)
-    return result
 
 
-def _sort_bool_pairs(records: list[dict]) -> list[dict]:
-    """_true/_false 패밀리를 인접하게 정렬 (_true -> _false 순서)."""
-    true_map:  dict[str, dict] = {}
-    false_map: dict[str, dict] = {}
-    others:    list[dict]      = []
-
-    for rec in records:
-        raw_family = rec.get("family") or ""
-        family = raw_family.removeprefix("baseline_")
-        if family.endswith("_true"):
-            true_map[family[:-5]] = rec
-        elif family.endswith("_false"):
-            false_map[family[:-6]] = rec
-        else:
-            others.append(rec)
-
-    result = list(others)
-    for base in sorted(set(list(true_map) + list(false_map))):
-        if base in true_map:
-            result.append(true_map[base])
-        if base in false_map:
-            result.append(false_map[base])
-    return result
-
-
-def _get_baseline_records_by_type(vtype: str) -> list[dict]:
+def _get_baseline_records_by_type(vtype: str, strength: str = "INSANE") -> list[dict]:
     records: list[dict] = []
     if "xss" in vtype:
         seen_payloads: set[str] = set()
@@ -167,7 +134,7 @@ def _get_baseline_records_by_type(vtype: str) -> list[dict]:
                     })
     elif "sqli" in vtype:
         ctx = _SQLI_CTX_MAP.get(vtype, "string_sq")
-        for bp in get_by_sql_context(ctx, "INSANE"):
+        for bp in get_by_sql_context(ctx, strength):
             records.append({
                 "vtype":   vtype,
                 "type":    bp.get("type"),
@@ -178,15 +145,12 @@ def _get_baseline_records_by_type(vtype: str) -> list[dict]:
 
 
 def build_tasks(
-    payloads: Any,
-    targets:  Any | None = None,
+    targets: list | None = None,
     base_cookie: dict | None = None,
     progress_callback=None,
 ) -> list[dict]:
-    if not payloads or not targets:
+    if not targets:
         return []
-
-    flat = _flatten_by_type(payloads)
 
     out:          list[dict]   = []
     tid:          int          = 0
@@ -230,6 +194,9 @@ def build_tasks(
             vuln_types = _infer_types(field_type, action, name, value)
             if not vuln_types:
                 continue
+
+            # numeric 파라미터에서 sqli_string은 secondary(최소 boolean pair만) 생성
+            _numeric_param = _is_numeric_value(value)
 
             # 다른 파라미터들의 원본 값 (REQ-COMMON-004/005: 한 번에 하나만 변조)
             base_params = {
@@ -316,12 +283,11 @@ def build_tasks(
 
             # payload 태스크 생성
             for vtype in vuln_types:
-                # flat 레코드 (LLM 생성): boolean pair 인접 정렬 후 emit
-                for rec in _sort_bool_pairs(flat.get(vtype, [])):
-                    if isinstance(rec, dict):
-                        _emit(rec.get("payload"), vtype, rec.get("type"), rec.get("family"))
-                # baseline 레코드 (sqli.py/xss.py): pair 전개 순서 보장됨
-                for rec in _get_baseline_records_by_type(vtype):
+                # baseline 레코드: numeric param의 sqli_string은 boolean pair만(MINIMAL)
+                baseline_strength = (
+                    "MINIMAL" if (_numeric_param and vtype == "sqli_string") else "INSANE"
+                )
+                for rec in _get_baseline_records_by_type(vtype, baseline_strength):
                     _emit(rec.get("payload"), vtype, rec.get("type"), rec.get("family"))
 
     return out

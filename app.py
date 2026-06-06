@@ -365,7 +365,7 @@ def _task_validate():
 
 
 def _task_all(skip_crawl: bool = False, resume: bool = False):
-    _all_impl(_run_path, _active_url(), _run_path("payloads.json"), _run_path("payloads_meta.json"), skip_crawl=skip_crawl, resume=resume, emit_progress=_emit_progress)
+    _all_impl(_run_path, _active_url(), skip_crawl=skip_crawl, resume=resume, emit_progress=_emit_progress)
 
 _TASK_FUNCS = {
     "crawl":    _task_crawl,

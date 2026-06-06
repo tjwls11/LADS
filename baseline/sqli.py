@@ -6,19 +6,18 @@ Payload = Dict
 _SLEEP = 5
 
 STRENGTH_LIMIT = {
-    "LOW":    5,
-    "MEDIUM": 15,
-    "HIGH":   40,
-    "INSANE": 9999,
+    "MINIMAL": 1,
+    "LOW":     5,
+    "MEDIUM":  4,
+    "HIGH":    40,
+    "INSANE":  9999,
 }
 
-# MySQL/MariaDB 에러 시그니처 (MySQL 기준만 유지)
+# MySQL/MariaDB 실제 에러 메시지만 사용
 ERROR_PATTERNS = [
     "you have an error in your sql syntax",
     "warning: mysql",
     "xpath syntax error",
-    "extractvalue(",
-    "updatexml(",
     "duplicate entry",
     "column count doesn't match",
     "the used select statements have a different number",
@@ -31,7 +30,6 @@ ERROR_PATTERNS = [
     "mysql_num_rows",
     "mysql_query",
     "mariadb server version",
-    "table 'g5_",
 ]
 
 # ── string_sq: WHERE col = 'INPUT' (싱글쿼트 문자열 컨텍스트) ──────
@@ -182,19 +180,17 @@ def expand_pairs(payloads: List[Payload]) -> List[Payload]:
 
 # ── 조회 함수 ────────────────────────────────────────────────────────
 
+#컨텍스트 이름으로 페이로드 반환 (강도 제한 적용). Boolean pair는 단건으로
 def get_by_sql_context(context: str, strength: str = "MEDIUM") -> List[Payload]:
-    """컨텍스트 이름으로 페이로드 반환 (강도 제한 적용). Boolean pair는 단건으로 전개."""
     pool = _CONTEXT_MAP.get(context.lower(), BLIND_STRING_SQ)
     return expand_pairs(_limit(pool, strength))
 
-
+# SQL 컨텍스트 타입 → 페이로드 리스트 반환. Boolean pair는 단건으로
 def get_blind_sqli(context: str) -> List[Payload]:
-    """SQL 컨텍스트 타입 → 페이로드 리스트 반환. Boolean pair는 단건으로 전개."""
     return expand_pairs(_CONTEXT_MAP.get(context.lower(), []))
 
-
+# 중복 제거 후 전체 페이로드 반환. Boolean pair는 단건
 def get_all() -> List[Payload]:
-    """중복 제거 후 전체 페이로드 반환. Boolean pair는 단건으로 전개."""
     seen: set = set()
     result: List[Payload] = []
     for pool in _CONTEXT_MAP.values():

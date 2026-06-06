@@ -22,8 +22,6 @@ DB_ERROR_KEYWORDS = (
     "you have an error in your sql syntax",
     "warning: mysql",
     "xpath syntax error",
-    "extractvalue(",
-    "updatexml(",
     "duplicate entry",
     "supplied argument is not a valid mysql",
     "division by zero",
@@ -58,6 +56,7 @@ _BOOL_TRUE = re.compile(
 _BOOL_FALSE = re.compile(
     r"1\s*=\s*2"
     r"|1\s*=\s*0"
+    r"|'\s*([a-z0-9])\s*'\s*=\s*'\s*(?!\1)[a-z0-9]\s*'"
     r"|\band\s+1\s*=\s*2"
     r"|\bfalse\b"
     r"|\band\s+0\b"

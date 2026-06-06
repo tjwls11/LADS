@@ -19,6 +19,7 @@ sum_log.txt
 newbase.py
 z_checkset/
 CLAUDE.md
+results/
 
 # Debug logs
 debug-*.log

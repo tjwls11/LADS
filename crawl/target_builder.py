@@ -10,6 +10,12 @@ OUTPUT_FILE = os.getenv("TARGETS_FILE",  "results/targets.json")
 # 인젝션 제외: CSRF/nonce 류 필드명
 CSRF_RE = re.compile(r"(csrf|token|nonce|_token|authenticity|captcha)", re.IGNORECASE)
 
+# 인젝션 제외: UI 제어용 파라미터 이름 (mode/action/type/category 같은 라우팅 파라미터는 제외)
+CONTROL_PARAMS_RE = re.compile(
+    r"^(submit|btn_submit|btn|button|save|cancel|ok|reset_btn|send)$",
+    re.IGNORECASE,
+)
+
 # 인젝션 제외: 의미 없는 버튼/파일 타입
 SKIP_TYPES = {"submit", "button", "reset", "image", "file", "checkbox", "radio"}
 
@@ -25,6 +31,8 @@ def _injectable(name: str, field_type: str) -> bool:
     if field_type in SKIP_TYPES:
         return False
     if CSRF_RE.search(name):
+        return False
+    if CONTROL_PARAMS_RE.match(name):
         return False
     return True
 
