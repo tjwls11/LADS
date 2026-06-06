@@ -105,6 +105,8 @@ def _get_baseline_records_by_type(vtype: str) -> list[dict]:
                 "type": bp.get("type"),
                 "family": "baseline_" + (bp.get("family") or ""),
                 "payload": bp.get("payload"),
+                "pair_id": bp.get("pair_id"),
+                "probe_role": bp.get("probe_role"),
             })
     return records
 
@@ -170,7 +172,15 @@ def build_tasks(
             used_payloads: set[str] = set()
             point_label = f"{_base_url(action).split('/')[-1]}_{name}"
 
-            def _emit(payload: str, vtype: str, rec_type, family, _label=point_label) -> None:
+            def _emit(
+                payload: str,
+                vtype: str,
+                rec_type,
+                family,
+                pair_id=None,
+                probe_role=None,
+                _label=point_label,
+            ) -> None:
                 nonlocal tid
                 if not payload or payload in used_payloads:
                     return
@@ -178,6 +188,15 @@ def build_tasks(
                     print(f"[PROBE] skipped destructive payload: point={_label}")
                     return
                 used_payloads.add(payload)
+                meta = {
+                    "vuln_type": vtype,
+                    "type": rec_type,
+                    "family": family,
+                }
+                if pair_id:
+                    meta["pair_id"] = pair_id
+                if probe_role:
+                    meta["probe_role"] = probe_role
                 out.append({
                     "id": f"t{tid:06d}_r",
                     "point": _label,
@@ -191,15 +210,29 @@ def build_tasks(
                     "base_value": value,
                     "payload": payload,
                     "enctype": target.get("enctype", ""),
-                    "meta": {"vuln_type": vtype, "type": rec_type, "family": family},
+                    "meta": meta,
                 })
                 tid += 1
 
             for vtype in vuln_types:
                 for rec in flat.get(vtype, []):
                     if isinstance(rec, dict):
-                        _emit(rec.get("payload"), vtype, rec.get("type"), rec.get("family"))
+                        _emit(
+                            rec.get("payload"),
+                            vtype,
+                            rec.get("type"),
+                            rec.get("family"),
+                            rec.get("pair_id"),
+                            rec.get("probe_role"),
+                        )
                 for rec in _get_baseline_records_by_type(vtype):
-                    _emit(rec.get("payload"), vtype, rec.get("type"), rec.get("family"))
+                    _emit(
+                        rec.get("payload"),
+                        vtype,
+                        rec.get("type"),
+                        rec.get("family"),
+                        rec.get("pair_id"),
+                        rec.get("probe_role"),
+                    )
 
     return out
