@@ -10,9 +10,9 @@ from payload.generator import run as generate_run
 from probe.strategy import build_tasks
 from probe.executor import execute
 from analyzer import validate as analyze_results
-from findings import load_findings, save_findings
+from findings import load_findings, save_findings, append_findings
 from bac.vertical import run_vertical_probe
-from misconfig.checker import run as misconfig_run
+from misconfig.runner import build_misconfig_results
 from utilities import ensure_parent_dir, load_json, save_json
 
 TASK_LABELS = {
@@ -181,14 +181,13 @@ def _task_bac_stream(run_path_fn, target_url=None, emit_progress=None):
     if target_url:
         print(f"[MISCONFIG] 설정 오류 점검 시작: {target_url}")
         try:
-            misconfig_findings = misconfig_run(
+            misconfig_findings = build_misconfig_results(
                 base_url=target_url,
-                output_file=bac_findings_file,
                 progress_callback=lambda done, total: _prog(
                     emit_progress, 80 + int(done / max(total, 1) * 18)
                 ),
-                append=True,
             )
+            append_findings(misconfig_findings, bac_findings_file)
             confirmed = sum(1 for f in misconfig_findings if f.get("type") == "MISCONFIG_CONFIRMED")
             warnings  = sum(1 for f in misconfig_findings if f.get("type") == "MISCONFIG_WARNING")
             print(f"[MISCONFIG] confirmed={confirmed}, warning={warnings}")
@@ -344,12 +343,11 @@ def _task_misconfig(run_path_fn, target_url, emit_progress=None):
     save_findings(non_misconfig, findings_file)
 
     print(f"[MISCONFIG] target: {target_url}")
-    findings = misconfig_run(
+    findings = build_misconfig_results(
         base_url=target_url,
-        output_file=findings_file,
         progress_callback=lambda done, total: _prog(emit_progress, 95 + int(done / max(total, 1) * 5)),
-        append=True,
     )
+    append_findings(findings, findings_file)
     confirmed = sum(1 for f in findings if f.get("type") == "MISCONFIG_CONFIRMED")
     warnings  = sum(1 for f in findings if f.get("type") == "MISCONFIG_WARNING")
     print(f"[MISCONFIG] confirmed={confirmed}, warning={warnings}")

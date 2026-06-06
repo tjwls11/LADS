@@ -414,7 +414,7 @@ def _check_file(base_url: str, path: str, category: str, rule_key: str) -> list[
             url=url,
             status=403,
             confidence=LOW,
-            evidence=f"{path} returned HTTP 403 — file may exist but access is restricted",
+            evidence=f"{path} HTTP 403 반환 — 파일이 존재하나 접근 차단됨",
         )]
 
     # [High-1] 3xx 리다이렉트: 따라가서 최종 응답 분석
@@ -430,7 +430,7 @@ def _check_file(base_url: str, path: str, category: str, rule_key: str) -> list[
                 url=url,
                 status=resp.status_code,
                 confidence=LOW,
-                evidence=f"{path} redirects to login page — file may exist behind authentication",
+                evidence=f"{path} 로그인 페이지로 리다이렉트 — 인증 뒤에 파일이 존재할 수 있음",
             )]
         found, evidence = _match_keywords(followed.text, rule_key)
         if found:
@@ -473,7 +473,7 @@ def _check_file(base_url: str, path: str, category: str, rule_key: str) -> list[
             url=url,
             status=resp.status_code,
             confidence=LOW,
-            evidence=f"{path} returned HTTP 200 with {len(body_stripped)} bytes — manual review recommended",
+            evidence=f"{path} HTTP 200 반환 ({len(body_stripped)} bytes) — 수동 확인 권장",
         )]
 
     return []
@@ -525,7 +525,7 @@ def _check_security_headers(base_url: str) -> list[dict]:
                 url=home_url,
                 status=resp.status_code,
                 confidence=confidence,
-                evidence=f"security header not set: {header_name}",
+                evidence=f"보안 헤더 누락: {header_name}",
                 extra={"header": header_name, "category": category},
             ))
 
@@ -554,9 +554,9 @@ def _check_security_headers(base_url: str) -> list[dict]:
                 conf     = HIGH if top_sev in ("CRITICAL", "HIGH") else MEDIUM
                 cve_ids  = ", ".join(c["id"] for c in cves[:3])
                 evidence = (
-                    f"version exposed: {header_name}: {value} "
-                    f"→ {len(cves)} CVE(s) found "
-                    f"(top: {top['id']} {top_sev} score={top.get('score')})"
+                    f"버전 정보 노출: {header_name}: {value} "
+                    f"→ CVE {len(cves)}건 "
+                    f"(주요: {top['id']} {top_sev} 점수={top.get('score')})"
                 )
                 print(f"[MISCONFIG] {ftype} version+CVE: {header_name}: {value} → {cve_ids}")
                 cve_links = [
@@ -580,7 +580,7 @@ def _check_security_headers(base_url: str) -> list[dict]:
                     url=home_url,
                     status=resp.status_code,
                     confidence=LOW,
-                    evidence=f"version info exposed: {header_name}: {value} (no matching CVE found)",
+                    evidence=f"버전 정보 노출: {header_name}: {value} (관련 CVE 없음)",
                     extra={"header": header_name, "value": value, "cves": []},
                 ))
         else:
@@ -592,7 +592,7 @@ def _check_security_headers(base_url: str) -> list[dict]:
                 url=home_url,
                 status=resp.status_code,
                 confidence=MEDIUM,
-                evidence=f"version info exposed via header: {header_name}: {value}",
+                evidence=f"헤더를 통한 버전 정보 노출: {header_name}: {value}",
                 extra={"header": header_name, "value": value},
             ))
 
@@ -616,9 +616,161 @@ def _check_error_disclosure(base_url: str) -> list[dict]:
             url=home_url,
             status=resp.status_code,
             confidence=HIGH,
-            evidence=f"error message in response: {m.group(0)[:100]}",
+            evidence=f"응답에 에러 메시지 노출: {m.group(0)[:100]}",
         ))
 
+    return findings
+
+
+def _check_cookies(base_url: str) -> list[dict]:
+    findings = []
+    home_url = base_url + "/"
+    resp = _get(home_url)
+    if resp is None:
+        return findings
+    try:
+        raw_cookies = resp.raw.headers.getlist("set-cookie")
+    except AttributeError:
+        raw_cookies = [v for k, v in resp.raw.headers.items() if k.lower() == "set-cookie"]
+    for raw in raw_cookies:
+        parts = [p.strip() for p in raw.split(";")]
+        name = parts[0].split("=")[0].strip() if parts else "unknown"
+        attrs_lower = {p.lower() for p in parts[1:]}
+        issues = []
+        if "secure" not in attrs_lower:
+            issues.append("Secure 플래그 누락")
+        if "httponly" not in attrs_lower:
+            issues.append("HttpOnly 플래그 누락")
+        if not any(a.startswith("samesite") for a in attrs_lower):
+            issues.append("SameSite 속성 누락")
+        if issues:
+            confidence = HIGH if len(issues) >= 2 else MEDIUM
+            print(f"[MISCONFIG] WARNING insecure_cookie: {name} → {', '.join(issues)}")
+            findings.append(misconfig_finding(
+                type=MISCONFIG_WARNING,
+                category="insecure_cookie",
+                url=home_url,
+                status=resp.status_code,
+                confidence=confidence,
+                evidence=f"쿠키 '{name}' 보안 속성 문제: {', '.join(issues)}",
+                extra={"cookie_name": name, "issues": issues},
+            ))
+    return findings
+
+
+def _check_cors(base_url: str) -> list[dict]:
+    findings = []
+    home_url = base_url + "/"
+    headers = {**_REQUEST_HEADERS, "Origin": "https://evil.example.com"}
+    try:
+        resp = requests.get(home_url, headers=headers, timeout=10, allow_redirects=False)
+    except requests.exceptions.RequestException:
+        return findings
+    acao = resp.headers.get("Access-Control-Allow-Origin", "")
+    acac = resp.headers.get("Access-Control-Allow-Credentials", "").lower()
+    if acao == "*":
+        print(f"[MISCONFIG] WARNING cors_wildcard: Access-Control-Allow-Origin: *")
+        findings.append(misconfig_finding(
+            type=MISCONFIG_WARNING,
+            category="cors_wildcard",
+            url=home_url,
+            status=resp.status_code,
+            confidence=MEDIUM,
+            evidence="Access-Control-Allow-Origin: * — 모든 출처 허용 (CORS 설정 취약)",
+            extra={"header": "Access-Control-Allow-Origin", "value": acao},
+        ))
+    elif acao and "evil.example.com" in acao and acac == "true":
+        print(f"[MISCONFIG] CONFIRMED cors_origin_reflection: {acao} + credentials")
+        findings.append(misconfig_finding(
+            type=MISCONFIG_CONFIRMED,
+            category="cors_origin_reflection",
+            url=home_url,
+            status=resp.status_code,
+            confidence=HIGH,
+            evidence=f"CORS 임의 출처 반사 + 자격증명 허용: {acao} + Access-Control-Allow-Credentials: true",
+            extra={"acao": acao, "acac": acac},
+        ))
+    return findings
+
+
+_ADMIN_PATHS: list[tuple[str, str]] = [
+    ("/admin",          "admin_panel"),
+    ("/admin/",         "admin_panel"),
+    ("/administrator/", "admin_panel"),
+    ("/admin.php",      "admin_panel"),
+    ("/phpmyadmin/",    "phpmyadmin"),
+    ("/phpmyadmin",     "phpmyadmin"),
+    ("/wp-admin/",      "wordpress_admin"),
+    ("/wp-login.php",   "wordpress_admin"),
+    ("/manager/html",   "tomcat_manager"),
+    ("/console",        "admin_console"),
+    ("/dashboard",      "admin_dashboard"),
+]
+
+
+def _check_admin_pages(base_url: str) -> list[dict]:
+    findings = []
+    for path, category in _ADMIN_PATHS:
+        url = base_url + path
+        resp = _get(url)
+        if resp is None:
+            continue
+        if resp.status_code == 200:
+            print(f"[MISCONFIG] WARNING admin_page_exposed (200): {url}")
+            findings.append(misconfig_finding(
+                type=MISCONFIG_WARNING,
+                category="admin_page_exposed",
+                url=url,
+                status=200,
+                confidence=MEDIUM,
+                evidence=f"관리자 페이지 접근 가능: {path}",
+                extra={"path": path, "admin_type": category},
+            ))
+        elif resp.status_code == 403:
+            print(f"[MISCONFIG] WARNING admin_page_exists (403): {url}")
+            findings.append(misconfig_finding(
+                type=MISCONFIG_WARNING,
+                category="admin_page_exists",
+                url=url,
+                status=403,
+                confidence=LOW,
+                evidence=f"관리자 페이지 존재 (403 접근 차단): {path}",
+                extra={"path": path, "admin_type": category},
+            ))
+    return findings
+
+
+_ROBOTS_SENSITIVE_KEYWORDS = [
+    "admin", "backup", "config", "private", "secret",
+    "database", "db", "sql", "upload", "internal", "log",
+]
+
+
+def _check_robots_txt(base_url: str) -> list[dict]:
+    findings = []
+    url = base_url + "/robots.txt"
+    resp = _get(url)
+    if resp is None or resp.status_code != 200:
+        return findings
+    disallow_paths = []
+    for line in resp.text.splitlines():
+        line = line.strip()
+        if line.lower().startswith("disallow:"):
+            path = line.split(":", 1)[1].strip()
+            if path and path != "/":
+                disallow_paths.append(path)
+    sensitive = [p for p in disallow_paths if any(kw in p.lower() for kw in _ROBOTS_SENSITIVE_KEYWORDS)]
+    if sensitive:
+        print(f"[MISCONFIG] WARNING robots_txt: {len(sensitive)}개 민감 경로 노출")
+        findings.append(misconfig_finding(
+            type=MISCONFIG_WARNING,
+            category="robots_txt_sensitive_paths",
+            url=url,
+            status=200,
+            confidence=LOW,
+            evidence=f"robots.txt에 민감 경로 {len(sensitive)}개 노출: {', '.join(sensitive[:5])}",
+            extra={"sensitive_paths": sensitive},
+        ))
     return findings
 
 
@@ -628,7 +780,7 @@ def check(base_url: str, progress_callback=None) -> list[dict]:
     base_url = normalize_base_url(base_url)
     findings: list[dict] = []
 
-    total = len(_SENSITIVE_FILES) + len(_DIRECTORY_PATHS) + 2  # +2: headers, error
+    total = len(_SENSITIVE_FILES) + len(_DIRECTORY_PATHS) + 6  # +6: headers, error, cookies, cors, admin, robots
     done = 0
 
     def _tick():
@@ -653,6 +805,22 @@ def check(base_url: str, progress_callback=None) -> list[dict]:
 
     print("[MISCONFIG] checking 에러 노출...")
     findings.extend(_check_error_disclosure(base_url))
+    _tick()
+
+    print("[MISCONFIG] checking 쿠키 보안 속성...")
+    findings.extend(_check_cookies(base_url))
+    _tick()
+
+    print("[MISCONFIG] checking CORS 설정...")
+    findings.extend(_check_cors(base_url))
+    _tick()
+
+    print(f"[MISCONFIG] checking 관리자 페이지... ({len(_ADMIN_PATHS)}개)")
+    findings.extend(_check_admin_pages(base_url))
+    _tick()
+
+    print("[MISCONFIG] checking robots.txt...")
+    findings.extend(_check_robots_txt(base_url))
     _tick()
 
     return findings

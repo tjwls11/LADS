@@ -660,6 +660,7 @@ def _group_findings_by_url(findings: list[dict]) -> list[dict]:
                 "payload":      str(f.get("payload") or "")[:120],
                 "status":       f.get("status"),
                 "evidence":     str(f.get("evidence") or "")[:200],
+                "cve_links":    (f.get("extra") or {}).get("cve_links", []),
             }
             for f in items
         ]
@@ -960,9 +961,10 @@ def run_detail(run_id):
             pass
     if "bac_findings.json" in files:
         findings.extend(load_json(os.path.join(run_dir, "bac_findings.json"), []))
-    xss_cnt = sum(1 for fi in findings if fi.get("module") == "xss")
-    sqli_cnt = sum(1 for fi in findings if fi.get("module") == "sqli")
-    bac_cnt = sum(1 for fi in findings if fi.get("module") == "bac")
+    xss_cnt      = sum(1 for fi in findings if fi.get("module") == "xss")
+    sqli_cnt     = sum(1 for fi in findings if fi.get("module") == "sqli")
+    bac_cnt      = sum(1 for fi in findings if fi.get("module") == "bac")
+    misconfig_cnt = sum(1 for fi in findings if fi.get("module") == "misconfig")
 
     exec_results, exec_ok, exec_timeout, exec_err = [], 0, 0, 0
     if "execution_results.json" in files:
@@ -988,10 +990,12 @@ def run_detail(run_id):
         run_type=run_type,
         is_current=(run_id == _current_run_id),
         has_crawl="crawl_result.json" in files,
-        has_targets="targets.json" in files,
+        has_payload="payloads.json" in files,
         has_probe="probe_tasks.json" in files or "bac_vertical_tasks.json" in files,
         has_exec="execution_results.json" in files or "bac_vertical_results.json" in files,
         has_findings="findings.json" in files or "bac_findings.json" in files,
+        has_bac=bac_cnt > 0,
+        has_misconfig=misconfig_cnt > 0,
         findings=findings,
         url_groups=url_groups,
         xss_cnt=xss_cnt,

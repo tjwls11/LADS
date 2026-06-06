@@ -233,13 +233,11 @@
 
   <div id="app-content" class="min-h-screen">
     <!-- 모바일 상단 헤더 -->
-    <header class="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-slate-200 bg-white px-4">
+    <header class="pointer-events-none absolute left-0 top-0 z-20 h-0 w-full">
       <button type="button" onclick="toggleMenu()" aria-label="메뉴 열기"
-              class="menu-toggle-btn" data-menu-toggle>
+              class="menu-toggle-btn pointer-events-auto absolute left-4 top-2" data-menu-toggle>
         <span class="material-symbols-outlined text-[24px]">menu</span>
       </button>
-      <div></div>
-      <div class="w-9"></div>
     </header>
 
     <main class="min-h-screen bg-background px-4 py-6 sm:px-6 sm:py-8 md:px-10 md:py-10 2xl:px-14">
